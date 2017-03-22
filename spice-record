@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+#
+# References:
+# - https://github.com/virt-manager/virt-manager/blob/master/virtManager/viewers.py
+# - http://lazka.github.io/pgi-docs/#SpiceClientGLib-2.0
+import argparse
+import logging
+
+from gi.repository import GObject
+
+import gi
+gi.require_version('SpiceClientGLib', '2.0')
+from gi.repository import SpiceClientGLib
+
+class SpiceRecorder():
+    def __init__(self):
+        self._spice_session = None
+        self._display = None
+        self._main_channel = None
+        self._display_channel = None
+
+    def _create_spice_session(self):
+        self._spice_session = SpiceClientGLib.Session(read_only=True)
+        SpiceClientGLib.set_session_option(self._spice_session)
+
+        GObject.GObject.connect(self._spice_session, "channel-new",
+                                self._channel_new_cb)
+
+    def _channel_new_cb(self, session, channel):
+        print("New channel callback:", channel)
+
+
+    def open_host(self, host='localhost', port=5900, tlsport=None):
+        self._create_spice_session()
+
+        logging.debug("Spice connecting to host=%s port=%s tlsport=%s",
+            host, port, tlsport)
+        self._spice_session.set_property("host", str(host))
+        if port:
+            self._spice_session.set_property("port", str(port))
+        if tlsport:
+            self._spice_session.set_property("tls-port", str(tlsport))
+
+        self._spice_session.connect()
+
+
+def main():
+    logging.basicConfig(level=logging.DEBUG)
+
+    sp = SpiceRecorder()
+    sp.open_host()
+
+
+if __name__ == '__main__':
+    main()
