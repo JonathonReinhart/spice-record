@@ -51,6 +51,7 @@ class SpiceRecorder(GObject.GObject):
 
             self._display_channel = channel
 
+            # See spice-gtk/src/spice-widget.c:channel_new()
             hid = self._display_channel.connect_after("display-invalidate",
                                            self._display_invalidate_cb)
             hid = self._display_channel.connect_after("display-mark",
@@ -62,6 +63,7 @@ class SpiceRecorder(GObject.GObject):
             hid = self._display_channel.connect_after("gl-draw",
                                            self._display_gl_draw_cb)
 
+            channel.connect()
             self.emit("connected")
 
 
