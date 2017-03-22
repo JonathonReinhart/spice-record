@@ -40,8 +40,41 @@ class SpiceRecorder(GObject.GObject):
                                         self._main_channel_event_cb)
             self._main_channel_hids.append(hid)
 
+        elif type(channel) == SpiceClientGLib.DisplayChannel and not self._display_channel:
+            channel_id = channel.get_property("channel-id")
+            if channel_id != 0:
+                logging.debug("Spice multi-head unsupported")
+                return
+
+            self._display_channel = channel
+
+            hid = self._display_channel.connect_after("display-invalidate",
+                                           self._display_invalidate_cb)
+            hid = self._display_channel.connect_after("display-mark",
+                                           self._display_mark_cb)
+            hid = self._display_channel.connect_after("display-primary-create",
+                                           self._display_primary_create_cb)
+            hid = self._display_channel.connect_after("display-primary-destroy",
+                                           self._display_primary_destroy_cb)
+            hid = self._display_channel.connect_after("gl-draw",
+                                           self._display_gl_draw_cb)
     def _main_channel_event_cb(self, channel, event):
         logging.debug("Main channel %s event %s", channel, event)
+
+    def _display_invalidate_cb(self, channel, x, y, width, height):
+        logging.debug("display-invalidate channel %s", channel)
+
+    def _display_mark_cb(self, channel, mark):
+        logging.debug("display-mark channel %s", channel)
+
+    def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
+        logging.debug("display-primary-create channel %s", channel)
+
+    def _display_primary_destroy_cb(self, channel):
+        logging.debug("display-primary-destroy channel %s", channel)
+
+    def _display_gl_draw_cb(self, channel, x, y, width, height):
+        logging.debug("gl-draw channel %s", channel)
 
     def open_host(self, host='localhost', port=5900, tlsport=None):
         self._create_spice_session()
