@@ -20,6 +20,7 @@ class SpiceRecorder(GObject.GObject):
         self._spice_session = None
         self._display = None
         self._main_channel = None
+        self._main_channel_hids = []
         self._display_channel = None
 
     def _create_spice_session(self):
@@ -32,6 +33,15 @@ class SpiceRecorder(GObject.GObject):
     def _channel_new_cb(self, session, channel):
         print("New channel callback:", channel)
 
+        if type(channel) == SpiceClientGLib.MainChannel and not self._main_channel:
+            self._main_channel = channel
+
+            hid = self._main_channel.connect_after("channel-event",
+                                        self._main_channel_event_cb)
+            self._main_channel_hids.append(hid)
+
+    def _main_channel_event_cb(self, channel, event):
+        logging.debug("Main channel %s event %s", channel, event)
 
     def open_host(self, host='localhost', port=5900, tlsport=None):
         self._create_spice_session()
