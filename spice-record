@@ -13,8 +13,10 @@ import gi
 gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
-class SpiceRecorder():
+class SpiceRecorder(GObject.GObject):
     def __init__(self):
+        GObject.GObject.__init__(self)
+
         self._spice_session = None
         self._display = None
         self._main_channel = None
