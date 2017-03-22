@@ -14,6 +14,9 @@ gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
 class SpiceRecorder(GObject.GObject):
+    __gsignals__ = {
+        "connected": (GObject.SignalFlags.RUN_FIRST, None, []),
+    }
     def __init__(self):
         GObject.GObject.__init__(self)
 
@@ -58,6 +61,11 @@ class SpiceRecorder(GObject.GObject):
                                            self._display_primary_destroy_cb)
             hid = self._display_channel.connect_after("gl-draw",
                                            self._display_gl_draw_cb)
+
+            self.emit("connected")
+
+
+
     def _main_channel_event_cb(self, channel, event):
         logging.debug("Main channel %s event %s", channel, event)
 
@@ -76,6 +84,11 @@ class SpiceRecorder(GObject.GObject):
     def _display_gl_draw_cb(self, channel, x, y, width, height):
         logging.debug("gl-draw channel %s", channel)
 
+    def get_resolution(self):
+        if not self._display_channel:
+            return None
+        return self._display_channel.get_properties("width", "height")
+
     def open_host(self, host='localhost', port=5900, tlsport=None):
         self._create_spice_session()
 
@@ -93,8 +106,13 @@ class SpiceRecorder(GObject.GObject):
 def main():
     logging.basicConfig(level=logging.DEBUG)
 
+    def connected(ignore):
+        w, h = sp.get_resolution()
+        print("Connected! {}x{}".format(w,h))
+
     sp = SpiceRecorder()
     sp.open_host()
+    sp.connect("connected", connected)
 
     loop = GLib.MainLoop()
     loop.run()
