@@ -58,7 +58,8 @@ class Display16555(Display):
 
 class SpiceRecorder(GObject.GObject):
     __gsignals__ = {
-        "connected": (GObject.SignalFlags.RUN_FIRST, None, []),
+        "connected":        (GObject.SignalFlags.RUN_FIRST, None, []),
+        "display-created":  (GObject.SignalFlags.RUN_FIRST, None, (object,)),
     }
     def __init__(self):
         GObject.GObject.__init__(self)
@@ -127,6 +128,7 @@ class SpiceRecorder(GObject.GObject):
         assert not self._display
         self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
         print(self._display)
+        self.emit("display-created", self._display)
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
@@ -160,9 +162,12 @@ def main():
         w, h = sp.get_resolution()
         print("Connected! {}x{}".format(w,h))
 
+    def disp_created(ignore, display):
+        print("Display created: {}".format(display))
     sp = SpiceRecorder()
     sp.open_host()
     sp.connect("connected", connected)
+    sp.connect("display-created", disp_created)
 
     loop = GLib.MainLoop()
     loop.run()
