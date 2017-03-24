@@ -3,8 +3,12 @@
 # References:
 # - https://github.com/virt-manager/virt-manager/blob/master/virtManager/viewers.py
 # - http://lazka.github.io/pgi-docs/#SpiceClientGLib-2.0
+# - spice-gtk/src/spicy-screenshot.c
+# - https://linuxtv.org/downloads/v4l-dvb-apis/uapi/v4l/pixfmt-packed-rgb.html
+# - http://zulko.github.io/blog/2013/09/27/read-and-write-video-frames-in-python-using-ffmpeg/
 import argparse
 import logging
+from enum import Enum
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -12,6 +16,45 @@ from gi.repository import GObject
 import gi
 gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
+
+class SpiceSurfaceFmt(Enum):
+    # spice-1/spice/enums.h
+    SPICE_SURFACE_FMT_INVALID = 0
+    SPICE_SURFACE_FMT_1_A = 1
+    SPICE_SURFACE_FMT_8_A = 8
+    SPICE_SURFACE_FMT_16_555 = 16
+    SPICE_SURFACE_FMT_32_xRGB = 32
+    SPICE_SURFACE_FMT_16_565 = 80
+    SPICE_SURFACE_FMT_32_ARGB = 96
+
+
+class Display(GObject.GObject):
+    def __init__(self, channel, width, height, stride, shmid, imgdata):
+        self.channel = channel
+        self.width   = width
+        self.height  = height
+        self.stride  = stride
+        self.shmid   = shmid
+        self.imgdata = imgdata
+
+    @staticmethod
+    def get_format_class(format):
+        return {
+            SpiceSurfaceFmt.SPICE_SURFACE_FMT_32_xRGB:  Display32RGB,
+            SpiceSurfaceFmt.SPICE_SURFACE_FMT_16_555:   Display16555
+        }[format]
+
+    def __repr__(self):
+        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, imgdata=0x{:X})'.format(
+                type(self), self.channel, self.width, self.height, self.stride, self.shmid, self.imgdata)
+
+class Display32RGB(Display):
+    fmtstr = '32 xRGB'
+
+class Display16555(Display):
+    fmtstr = '16 555'
+
+
 
 class SpiceRecorder(GObject.GObject):
     __gsignals__ = {
@@ -72,13 +115,18 @@ class SpiceRecorder(GObject.GObject):
         logging.debug("Main channel %s event %s", channel, event)
 
     def _display_invalidate_cb(self, channel, x, y, width, height):
-        logging.debug("display-invalidate channel %s", channel)
+        logging.debug("display-invalidate channel=%s x=%d y=%d width=%d height=%d",
+                channel, x, y, width, height)
 
     def _display_mark_cb(self, channel, mark):
         logging.debug("display-mark channel %s", channel)
 
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
-        logging.debug("display-primary-create channel %s", channel)
+        format = SpiceSurfaceFmt(format)
+        logging.debug("display-primary-create channel=%s format=%s", channel, format)
+        assert not self._display
+        self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
+        print(self._display)
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
