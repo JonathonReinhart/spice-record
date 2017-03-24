@@ -154,6 +154,12 @@ class SpiceRecorder(GObject.GObject):
 
         self._spice_session.connect()
 
+FPS = 2
+
+def framerate_timeout(sp):
+    print('framerate_timeout sp={}'.format(sp))
+    return True
+
 
 def main():
     logging.basicConfig(level=logging.DEBUG)
@@ -164,6 +170,9 @@ def main():
 
     def disp_created(ignore, display):
         print("Display created: {}".format(display))
+        GLib.timeout_add(int(1000 / FPS), framerate_timeout, sp)
+        framerate_timeout(sp)
+
     sp = SpiceRecorder()
     sp.open_host()
     sp.connect("connected", connected)
