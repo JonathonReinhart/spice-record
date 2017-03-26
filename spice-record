@@ -72,6 +72,10 @@ class Display32RGB(Display):
 
 
 class SpiceRecorder(GObject.GObject):
+    __gsignals__ = {
+        "periodic-update":  (GObject.SignalFlags.RUN_FIRST, None, []),
+    }
+
     def __init__(self, outfile, framerate=24):
         GObject.GObject.__init__(self)
 
@@ -85,6 +89,7 @@ class SpiceRecorder(GObject.GObject):
 
         self._last_frame_t = None
 
+        self._last_periodic_update_t = None
         self._num_frames_recorded = 0
         self._num_bytes_recorded = 0
         self._start_time = None
@@ -169,6 +174,13 @@ class SpiceRecorder(GObject.GObject):
         self._num_frames_recorded += 1
         self._num_bytes_recorded += b
 
+        # Perform periodic update
+        if self._last_periodic_update_t:
+            dt = now - self._last_periodic_update_t
+        if not self._last_periodic_update_t or (dt > 1.0):
+            self.emit("periodic-update")
+            self._last_periodic_update_t = now
+
         return True
 
     @property
@@ -220,15 +232,32 @@ def parse_args():
     ap.add_argument('-r', '--framerate', type=int, default=24)
     return ap.parse_args()
 
+def format_datasize(b):
+    suffixes = ['', 'ki', 'Mi', 'Gi', 'Ti']
+    for s in suffixes:
+        if (b < 1024) or (s == suffixes[-1]):
+            break
+        b /= 1024.0
+    return '{:0.02f} {}B'.format(b, s)
 
 def main():
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
 
-    # Record
+
     with tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw') as rawf:
+        # Record raw video
         sp = SpiceRecorder(rawf, framerate=args.framerate)
         sp.open_host()
+
+        def periodic_update(sp):
+            print("\r" + " "*80, end="")
+            print("\r{:<20}{:<20}{:<20}".format(
+                "{:0.02f} sec".format(sp.elapsed_time),
+                "{} frames".format(sp.frames_recorded),
+                format_datasize(sp.bytes_recorded),
+                ), end="")
+        sp.connect("periodic-update", periodic_update)
 
         loop = GLib.MainLoop()
 
@@ -236,7 +265,7 @@ def main():
             loop.quit()
         old = signal.signal(signal.SIGINT, sigint_handler)
 
-        print("Press Ctrl+C to stop")
+        print("Recording... Press Ctrl+C to stop")
         loop.run()
 
         print("Done recording")
