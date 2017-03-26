@@ -178,6 +178,8 @@ class SpiceRecorder(GObject.GObject):
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument('output')
+    ap.add_argument('--loglevel', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+            help='Set the logging level', default='WARNING')
     ap.add_argument('-r', '--framerate', type=int, default=24)
     return ap.parse_args()
 
@@ -201,9 +203,8 @@ def convert_raw(input_stream, output_path, w, h, framerate):
 
 
 def main():
-    logging.basicConfig(level=logging.DEBUG)
-
     args = parse_args()
+    logging.basicConfig(level=args.loglevel)
 
     # Record
     with tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw') as rawf:
