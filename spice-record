@@ -191,6 +191,8 @@ def logging_to_ffmpeg_loglevel(ll):
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument('output')
+    ap.add_argument('--vcodec', default='libx264',
+            help='Set the output video codec (see "ffmpeg -encoders" for choices)')
     ap.add_argument('--loglevel', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
             help='Set the logging level', default='WARNING')
     ap.add_argument('-r', '--framerate', type=int, default=24)
@@ -233,7 +235,7 @@ def main():
             '-r', str(args.framerate),
             '-i', '-',  # stdin
             '-an',
-            '-vcodec', 'libx264',
+            '-vcodec', args.vcodec,
             args.output
         ]
         logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
