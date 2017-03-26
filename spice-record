@@ -267,12 +267,11 @@ def main():
 
         print("Recording... Press Ctrl+C to stop")
         loop.run()
-
-        print("Done recording")
         signal.signal(signal.SIGINT, old)
 
 
         # Convert video
+        print("\nDone recording. Converting...")
         rawf.seek(0)
         d = sp._display
         ffmpeg_args = [
