@@ -182,7 +182,7 @@ def parse_args():
     return ap.parse_args()
 
 
-def convert_raw(input_path, output_path, w, h, framerate):
+def convert_raw(input_stream, output_path, w, h, framerate):
     args = [
         'ffmpeg',
         '-y',
@@ -191,13 +191,13 @@ def convert_raw(input_path, output_path, w, h, framerate):
         '-s', '{}x{}'.format(w, h),
         '-pix_fmt', 'bgr0',
         '-r', str(framerate),
-        '-i', input_path,
+        '-i', '-',  # stdin
         '-an',
         '-vcodec', 'libx264',
         output_path,
     ]
     print("Invoking FFMPEG:", args)
-    subprocess.check_call(args)
+    subprocess.check_call(args, stdin=input_stream)
 
 
 def main():
@@ -206,7 +206,7 @@ def main():
     args = parse_args()
 
     # Record
-    with tempfile.NamedTemporaryFile('wb', prefix='spice-record-', suffix='.raw', delete=False) as rawf:
+    with tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw') as rawf:
         sp = SpiceRecorder(rawf, framerate=args.framerate)
         sp.open_host()
 
@@ -223,9 +223,10 @@ def main():
         signal.signal(signal.SIGINT, old)
 
 
-    # Convert video
-    w, h = sp.get_resolution()
-    convert_raw(rawf.name, args.output, w, h, args.framerate)
+        # Convert video
+        rawf.seek(0)
+        w, h = sp.get_resolution()
+        convert_raw(rawf, args.output, w, h, args.framerate)
 
 
 
