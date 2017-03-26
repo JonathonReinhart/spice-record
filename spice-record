@@ -66,9 +66,6 @@ class Display32RGB(Display):
 
 
 class SpiceRecorder(GObject.GObject):
-    __gsignals__ = {
-        "connected":        (GObject.SignalFlags.RUN_FIRST, None, []),
-    }
     def __init__(self, outfile, framerate=24):
         GObject.GObject.__init__(self)
 
@@ -115,7 +112,6 @@ class SpiceRecorder(GObject.GObject):
                                            self._display_primary_destroy_cb)
 
             channel.connect()
-            self.emit("connected")
 
 
 
@@ -198,16 +194,10 @@ def main():
 
     args = parse_args()
 
-    def connected(ignore):
-        w, h = sp.get_resolution()
-        print("Connected! {}x{}".format(w,h))
-
-
     # Record
     with tempfile.NamedTemporaryFile('wb', prefix='spice-record-', suffix='.raw', delete=False) as rawf:
         sp = SpiceRecorder(rawf, framerate=args.framerate)
         sp.open_host()
-        sp.connect("connected", connected)
 
         loop = GLib.MainLoop()
 
