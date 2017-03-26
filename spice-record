@@ -23,6 +23,9 @@ import gi
 gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
+# Maximum framerate timer error allowance (percent of frame interval)
+FRAMERATE_ERR_LIMIT_PCT = 1.0
+
 class SpiceSurfaceFmt(Enum):
     # spice-1/spice/enums.h
     SPICE_SURFACE_FMT_INVALID = 0
@@ -60,8 +63,7 @@ class Display32RGB(Display):
         # stride [bytes] == width [pixels] * 4 [bytes / pixel]
         assert(self.stride == self.width * 4)
 
-        wrote = f.write(self.imgdata.contents)
-        print("wrote {} bytes".format(wrote))
+        f.write(self.imgdata.contents)
         return True
 
 
@@ -141,12 +143,13 @@ class SpiceRecorder(GObject.GObject):
 
     def _record_frame(self):
         now = time.time()
+        t_frame = 1 / self.framerate
         if self._last_frame_t:
             dt = now - self._last_frame_t
-            err = dt - (1 / self.framerate)
-            print("_record_frame() dt={} (err={})".format(dt, err))
-        else:
-            print("_record_frame() first frame")
+            err = dt - t_frame
+            err_pct = (err / t_frame) * 100
+            if err_pct > FRAMERATE_ERR_LIMIT_PCT:
+                logging.warning("Framerate error exceeds threshold: dt={} err={} ({}%)".format(dt, err, err_pct))
         self._last_frame_t = now
 
 
