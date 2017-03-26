@@ -193,6 +193,25 @@ def parse_args():
     ap.add_argument('-r', '--framerate', type=int, default=24)
     return ap.parse_args()
 
+
+def convert_raw(input_path, output_path, w, h, framerate):
+    args = [
+        'ffmpeg',
+        '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-s', '{}x{}'.format(w, h),
+        '-pix_fmt', 'bgr0',
+        '-r', str(framerate),
+        '-i', input_path,
+        '-an',
+        '-vcodec', 'libx264',
+        output_path,
+    ]
+    print("Invoking FFMPEG:", args)
+    subprocess.check_call(args)
+
+
 def main():
     logging.basicConfig(level=logging.DEBUG)
 
@@ -219,19 +238,7 @@ def main():
 
     # Convert video
     w, h = sp.get_resolution()
-    subprocess.check_call([
-        'ffmpeg',
-        '-y',
-        '-f', 'rawvideo',
-        '-vcodec', 'rawvideo',
-        '-s', '{}x{}'.format(w, h),
-        '-pix_fmt', 'bgr0',
-        '-r', str(args.framerate),
-        '-i', rawf.name,
-        '-an',
-        '-vcodec', 'libx264',
-        args.output,
-    ])
+    convert_raw(rawf.name, args.output, w, h, args.framerate)
 
 
 
