@@ -44,7 +44,13 @@ class Display(GObject.GObject):
         self.height  = height
         self.stride  = stride
         self.shmid   = shmid
-        self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * width * height * 4))
+
+        # Ensure there is no width padding
+        # stride [bytes] == width [pixels] * 4 [bytes / pixel]
+        assert(self.stride == self.width * self.bytes_per_pixel)
+
+        imgdata_bytes = stride * height
+        self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * imgdata_bytes))
 
     @staticmethod
     def get_format_class(format):
@@ -58,11 +64,9 @@ class Display(GObject.GObject):
                 type(self), self.channel, self.width, self.height, self.stride, self.shmid, self.imgdata)
 
 class Display32RGB(Display):
-    def write_frame(self, f):
-        # Ensure there is no width padding
-        # stride [bytes] == width [pixels] * 4 [bytes / pixel]
-        assert(self.stride == self.width * 4)
+    bytes_per_pixel = 4
 
+    def write_frame(self, f):
         f.write(self.imgdata.contents)
         return True
 
