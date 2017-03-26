@@ -13,6 +13,7 @@ import time
 import ctypes
 from enum import Enum
 import tempfile
+import subprocess
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -186,9 +187,16 @@ class SpiceRecorder(GObject.GObject):
         self._spice_session.connect()
 
 
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('output')
+    ap.add_argument('-r', '--framerate', type=int, default=24)
+    return ap.parse_args()
 
 def main():
     logging.basicConfig(level=logging.DEBUG)
+
+    args = parse_args()
 
     def connected(ignore):
         w, h = sp.get_resolution()
@@ -208,6 +216,23 @@ def main():
             loop.run()
         except KeyboardInterrupt:
             pass
+
+    # Convert video
+    w, h = sp.get_resolution()
+    subprocess.check_call([
+        'ffmpeg',
+        '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-s', '{}x{}'.format(w, h),
+        '-pix_fmt', 'bgr0',
+        '-r', str(args.framerate),
+        '-i', rawf.name,
+        '-an',
+        '-vcodec', 'libx264',
+        args.output,
+    ])
+
 
 
 
