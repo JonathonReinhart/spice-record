@@ -59,6 +59,10 @@ class Display32RGB(Display):
     fmtstr = '32 xRGB'
 
     def write_frame(self, f):
+        # Ensure there is no width padding
+        # stride [bytes] == width [pixels] * 4 [bytes / pixel]
+        assert(self.stride == self.width * 4)
+
         wrote = f.write(self.imgdata.contents)
         print("wrote {} bytes".format(wrote))
         return True
