@@ -75,7 +75,6 @@ class SpiceRecorder(GObject.GObject):
         self._spice_session = None
         self._display = None
         self._main_channel = None
-        self._main_channel_hids = []
         self._display_channel = None
 
         self._last_frame_t = None
@@ -88,27 +87,36 @@ class SpiceRecorder(GObject.GObject):
                                 self._channel_new_cb)
 
     def _channel_new_cb(self, session, channel):
-        print("New channel callback:", channel)
+        logging.debug("New channel signal: channel=%s", channel)
 
-        if type(channel) == SpiceClientGLib.MainChannel and not self._main_channel:
+        # Dispatch
+        cb = {
+            SpiceClientGLib.MainChannel:    self._new_main_channel,
+            SpiceClientGLib.DisplayChannel: self._new_display_channel
+        }.get(type(channel))
+        if cb:
+            cb(channel)
+
+    def _new_main_channel(self, channel):
             self._main_channel = channel
-
-            hid = self._main_channel.connect_after("channel-event",
+            self._main_channel.connect_after("channel-event",
                                         self._main_channel_event_cb)
-            self._main_channel_hids.append(hid)
 
-        elif type(channel) == SpiceClientGLib.DisplayChannel and not self._display_channel:
+    def _new_display_channel(self, channel):
             channel_id = channel.get_property("channel-id")
             if channel_id != 0:
-                logging.debug("Spice multi-head unsupported")
+                logging.warning("Spice multi-head unsupported")
                 return
 
+            if self._display_channel:
+                logging.warning("Display channel already set")
+                return
             self._display_channel = channel
 
             # See spice-gtk/src/spice-widget.c:channel_new()
-            hid = self._display_channel.connect_after("display-primary-create",
+            self._display_channel.connect_after("display-primary-create",
                                            self._display_primary_create_cb)
-            hid = self._display_channel.connect_after("display-primary-destroy",
+            self._display_channel.connect_after("display-primary-destroy",
                                            self._display_primary_destroy_cb)
 
             channel.connect()
