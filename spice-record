@@ -68,8 +68,7 @@ class Display32RGB(Display):
     ffmpeg_pix_fmt = 'bgr0'     # Each pixel is 4 bytes: BGR0,BGR0,...
 
     def write_frame(self, f):
-        f.write(self.imgdata.contents)
-        return True
+        return f.write(self.imgdata.contents)
 
 
 class SpiceRecorder(GObject.GObject):
@@ -85,6 +84,10 @@ class SpiceRecorder(GObject.GObject):
         self._display_channel = None
 
         self._last_frame_t = None
+
+        self._num_frames_recorded = 0
+        self._num_bytes_recorded = 0
+        self._start_time = None
 
     def _create_spice_session(self):
         self._spice_session = SpiceClientGLib.Session(read_only=True)
@@ -140,6 +143,8 @@ class SpiceRecorder(GObject.GObject):
         self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
         logging.debug("_display: %s", self._display)
 
+        self._start_time = time.time()
+        self._record_frame()
         GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
 
 
@@ -148,6 +153,8 @@ class SpiceRecorder(GObject.GObject):
 
     def _record_frame(self):
         now = time.time()
+
+        # Calculate framerate timer error
         t_frame = 1 / self.framerate
         if self._last_frame_t:
             dt = now - self._last_frame_t
@@ -157,9 +164,24 @@ class SpiceRecorder(GObject.GObject):
                 logging.warning("Framerate error exceeds threshold: dt={} err={} ({}%)".format(dt, err, err_pct))
         self._last_frame_t = now
 
+        # Write the frame!
+        b = self._display.write_frame(self.outfile)
+        self._num_frames_recorded += 1
+        self._num_bytes_recorded += b
 
-        self._display.write_frame(self.outfile)
         return True
+
+    @property
+    def elapsed_time(self):
+        return time.time() - self._start_time
+
+    @property
+    def frames_recorded(self):
+        return self._num_frames_recorded
+
+    @property
+    def bytes_recorded(self):
+        return self._num_bytes_recorded
 
     def get_resolution(self):
         if not self._display_channel:
