@@ -14,6 +14,7 @@ import ctypes
 from enum import Enum
 import tempfile
 import subprocess
+import signal
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -230,11 +231,16 @@ def main():
 
         loop = GLib.MainLoop()
 
+        def sigint_handler(signum, frame):
+            loop.quit()
+        old = signal.signal(signal.SIGINT, sigint_handler)
+
         print("Press Ctrl+C to stop")
-        try:
-            loop.run()
-        except KeyboardInterrupt:
-            pass
+        loop.run()
+
+        print("Done recording")
+        signal.signal(signal.SIGINT, old)
+
 
     # Convert video
     w, h = sp.get_resolution()
