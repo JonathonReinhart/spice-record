@@ -42,7 +42,7 @@ class Display(GObject.GObject):
         self.stride  = stride
         self.shmid   = shmid
         print(">>>>>>>> imgdata = 0x{0:X}".format(imgdata))
-        self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * width * height))
+        self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * width * height * 4))
 
     @staticmethod
     def get_format_class(format):
