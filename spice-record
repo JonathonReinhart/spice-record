@@ -223,7 +223,7 @@ def main():
 
 
     # Record
-    with tempfile.NamedTemporaryFile('wb', delete=False) as rawf:
+    with tempfile.NamedTemporaryFile('wb', prefix='spice-record-', suffix='.raw', delete=False) as rawf:
         sp = SpiceRecorder(rawf, framerate=args.framerate)
         sp.open_host()
         sp.connect("connected", connected)
