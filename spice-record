@@ -8,6 +8,7 @@
 # - http://zulko.github.io/blog/2013/09/27/read-and-write-video-frames-in-python-using-ffmpeg/
 import argparse
 import logging
+import time
 from enum import Enum
 
 from gi.repository import GLib
@@ -59,16 +60,20 @@ class Display16555(Display):
 class SpiceRecorder(GObject.GObject):
     __gsignals__ = {
         "connected":        (GObject.SignalFlags.RUN_FIRST, None, []),
-        "display-created":  (GObject.SignalFlags.RUN_FIRST, None, (object,)),
     }
-    def __init__(self):
+    def __init__(self, outfile, framerate=24):
         GObject.GObject.__init__(self)
+
+        self.outfile = outfile
+        self.framerate = framerate
 
         self._spice_session = None
         self._display = None
         self._main_channel = None
         self._main_channel_hids = []
         self._display_channel = None
+
+        self._last_frame_t = None
 
     def _create_spice_session(self):
         self._spice_session = SpiceClientGLib.Session(read_only=True)
@@ -128,13 +133,26 @@ class SpiceRecorder(GObject.GObject):
         assert not self._display
         self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
         print(self._display)
-        self.emit("display-created", self._display)
+
+        GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
+
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
 
     def _display_gl_draw_cb(self, channel, x, y, width, height):
         logging.debug("gl-draw channel %s", channel)
+
+    def _record_frame(self):
+        now = time.time()
+        if self._last_frame_t:
+            dt = now - self._last_frame_t
+            err = dt - (1 / self.framerate)
+            print("_record_frame() dt={} (err={})".format(dt, err))
+        else:
+            print("_record_frame() first frame")
+        self._last_frame_t = now
+        return True
 
     def get_resolution(self):
         if not self._display_channel:
@@ -154,11 +172,6 @@ class SpiceRecorder(GObject.GObject):
 
         self._spice_session.connect()
 
-FPS = 2
-
-def framerate_timeout(sp):
-    print('framerate_timeout sp={}'.format(sp))
-    return True
 
 
 def main():
@@ -168,15 +181,10 @@ def main():
         w, h = sp.get_resolution()
         print("Connected! {}x{}".format(w,h))
 
-    def disp_created(ignore, display):
-        print("Display created: {}".format(display))
-        GLib.timeout_add(int(1000 / FPS), framerate_timeout, sp)
-        framerate_timeout(sp)
 
     sp = SpiceRecorder()
     sp.open_host()
     sp.connect("connected", connected)
-    sp.connect("display-created", disp_created)
 
     loop = GLib.MainLoop()
     loop.run()
