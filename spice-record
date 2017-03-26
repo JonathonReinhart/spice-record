@@ -41,7 +41,6 @@ class Display(GObject.GObject):
         self.height  = height
         self.stride  = stride
         self.shmid   = shmid
-        print(">>>>>>>> imgdata = 0x{0:X}".format(imgdata))
         self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * width * height * 4))
 
     @staticmethod
@@ -110,16 +109,10 @@ class SpiceRecorder(GObject.GObject):
             self._display_channel = channel
 
             # See spice-gtk/src/spice-widget.c:channel_new()
-            hid = self._display_channel.connect_after("display-invalidate",
-                                           self._display_invalidate_cb)
-            hid = self._display_channel.connect_after("display-mark",
-                                           self._display_mark_cb)
             hid = self._display_channel.connect_after("display-primary-create",
                                            self._display_primary_create_cb)
             hid = self._display_channel.connect_after("display-primary-destroy",
                                            self._display_primary_destroy_cb)
-            hid = self._display_channel.connect_after("gl-draw",
-                                           self._display_gl_draw_cb)
 
             channel.connect()
             self.emit("connected")
@@ -128,13 +121,6 @@ class SpiceRecorder(GObject.GObject):
 
     def _main_channel_event_cb(self, channel, event):
         logging.debug("Main channel %s event %s", channel, event)
-
-    def _display_invalidate_cb(self, channel, x, y, width, height):
-        logging.debug("display-invalidate channel=%s x=%d y=%d width=%d height=%d",
-                channel, x, y, width, height)
-
-    def _display_mark_cb(self, channel, mark):
-        logging.debug("display-mark channel %s", channel)
 
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
@@ -148,9 +134,6 @@ class SpiceRecorder(GObject.GObject):
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
-
-    def _display_gl_draw_cb(self, channel, x, y, width, height):
-        logging.debug("gl-draw channel %s", channel)
 
     def _record_frame(self):
         now = time.time()
