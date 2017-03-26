@@ -24,7 +24,7 @@ gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
 # Maximum framerate timer error allowance (percent of frame interval)
-FRAMERATE_ERR_LIMIT_PCT = 1.0
+FRAMERATE_ERR_LIMIT_PCT = 10.0
 
 class SpiceSurfaceFmt(Enum):
     # spice-1/spice/enums.h
