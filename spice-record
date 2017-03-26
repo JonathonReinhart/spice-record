@@ -65,6 +65,7 @@ class Display(GObject.GObject):
 
 class Display32RGB(Display):
     bytes_per_pixel = 4
+    ffmpeg_pix_fmt = 'bgr0'     # Each pixel is 4 bytes: BGR0,BGR0,...
 
     def write_frame(self, f):
         f.write(self.imgdata.contents)
@@ -137,7 +138,7 @@ class SpiceRecorder(GObject.GObject):
         logging.debug("display-primary-create channel=%s format=%s", channel, format)
         assert not self._display
         self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
-        print(self._display)
+        logging.debug("_display: %s", self._display)
 
         GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
 
@@ -178,6 +179,14 @@ class SpiceRecorder(GObject.GObject):
 
         self._spice_session.connect()
 
+def logging_to_ffmpeg_loglevel(ll):
+    return {
+        'DEBUG':    'debug',
+        'INFO':     'info',
+        'WARNING':  'warning',
+        'ERROR':    'error',
+        'CRITICAL': 'fatal',
+    }[ll]
 
 def parse_args():
     ap = argparse.ArgumentParser()
@@ -186,24 +195,6 @@ def parse_args():
             help='Set the logging level', default='WARNING')
     ap.add_argument('-r', '--framerate', type=int, default=24)
     return ap.parse_args()
-
-
-def convert_raw(input_stream, output_path, w, h, framerate):
-    args = [
-        'ffmpeg',
-        '-y',
-        '-f', 'rawvideo',
-        '-vcodec', 'rawvideo',
-        '-s', '{}x{}'.format(w, h),
-        '-pix_fmt', 'bgr0',
-        '-r', str(framerate),
-        '-i', '-',  # stdin
-        '-an',
-        '-vcodec', 'libx264',
-        output_path,
-    ]
-    print("Invoking FFMPEG:", args)
-    subprocess.check_call(args, stdin=input_stream)
 
 
 def main():
@@ -230,10 +221,23 @@ def main():
 
         # Convert video
         rawf.seek(0)
-        w, h = sp.get_resolution()
-        convert_raw(rawf, args.output, w, h, args.framerate)
-
-
+        d = sp._display
+        ffmpeg_args = [
+            'ffmpeg',
+            '-loglevel', logging_to_ffmpeg_loglevel(args.loglevel),
+            '-y',
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-s', '{}x{}'.format(d.width, d.height),
+            '-pix_fmt', d.ffmpeg_pix_fmt,
+            '-r', str(args.framerate),
+            '-i', '-',  # stdin
+            '-an',
+            '-vcodec', 'libx264',
+            args.output
+        ]
+        logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
+        subprocess.check_call(ffmpeg_args, stdin=rawf)
 
 
 if __name__ == '__main__':
