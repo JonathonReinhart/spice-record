@@ -6,10 +6,13 @@
 # - spice-gtk/src/spicy-screenshot.c
 # - https://linuxtv.org/downloads/v4l-dvb-apis/uapi/v4l/pixfmt-packed-rgb.html
 # - http://zulko.github.io/blog/2013/09/27/read-and-write-video-frames-in-python-using-ffmpeg/
+# - https://msdn.microsoft.com/en-us/library/windows/desktop/aa473780.aspx
 import argparse
 import logging
 import time
+import ctypes
 from enum import Enum
+import tempfile
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -36,7 +39,8 @@ class Display(GObject.GObject):
         self.height  = height
         self.stride  = stride
         self.shmid   = shmid
-        self.imgdata = imgdata
+        print(">>>>>>>> imgdata = 0x{0:X}".format(imgdata))
+        self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * width * height))
 
     @staticmethod
     def get_format_class(format):
@@ -46,11 +50,17 @@ class Display(GObject.GObject):
         }[format]
 
     def __repr__(self):
-        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, imgdata=0x{:X})'.format(
+        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, imgdata={})'.format(
                 type(self), self.channel, self.width, self.height, self.stride, self.shmid, self.imgdata)
 
 class Display32RGB(Display):
     fmtstr = '32 xRGB'
+
+    def write_frame(self, f):
+        wrote = f.write(self.imgdata.contents)
+        print("wrote {} bytes".format(wrote))
+        return True
+
 
 class Display16555(Display):
     fmtstr = '16 555'
@@ -152,6 +162,9 @@ class SpiceRecorder(GObject.GObject):
         else:
             print("_record_frame() first frame")
         self._last_frame_t = now
+
+
+        self._display.write_frame(self.outfile)
         return True
 
     def get_resolution(self):
@@ -182,12 +195,20 @@ def main():
         print("Connected! {}x{}".format(w,h))
 
 
-    sp = SpiceRecorder()
-    sp.open_host()
-    sp.connect("connected", connected)
+    # Record
+    with tempfile.NamedTemporaryFile('wb', delete=False) as rawf:
+        sp = SpiceRecorder(rawf, framerate=args.framerate)
+        sp.open_host()
+        sp.connect("connected", connected)
 
-    loop = GLib.MainLoop()
-    loop.run()
+        loop = GLib.MainLoop()
+
+        print("Press Ctrl+C to stop")
+        try:
+            loop.run()
+        except KeyboardInterrupt:
+            pass
+
 
 
 if __name__ == '__main__':
