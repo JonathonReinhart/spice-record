@@ -185,7 +185,8 @@ class SpiceRecorder(GObject.GObject):
             logging.warning("Hmm? _active_display is set: %s", self._active_display)
             return
 
-        rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw', delete=False)
+        rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-',
+                suffix='{}x{}.raw'.format(width, height), delete=False)
         d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
         logging.debug("New display: %s", d)
         self._active_display = d
