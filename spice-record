@@ -217,6 +217,10 @@ class SpiceRecorder(GObject.GObject):
                 logging.warning("Framerate error exceeds threshold: dt={} err={} ({}%)".format(dt, err, err_pct))
         self._last_frame_t = now
 
+        # Ugh, can we miss frames here while there is no display?
+        if not self._active_display:
+            return
+
         # Write the frame!
         b = self._active_display.write_frame()
         self._num_frames_recorded += 1
