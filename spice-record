@@ -7,6 +7,10 @@
 # - https://linuxtv.org/downloads/v4l-dvb-apis/uapi/v4l/pixfmt-packed-rgb.html
 # - http://zulko.github.io/blog/2013/09/27/read-and-write-video-frames-in-python-using-ffmpeg/
 # - https://msdn.microsoft.com/en-us/library/windows/desktop/aa473780.aspx
+# - https://superuser.com/a/1136854/101823
+# - https://ffmpeg.org/ffmpeg-filters.html
+# - https://ffmpeg.org/ffmpeg-filters.html#scale
+# - https://ffmpeg.org/ffmpeg-filters.html#concat
 import argparse
 import logging
 import time
@@ -15,6 +19,7 @@ from enum import Enum
 import tempfile
 import subprocess
 import signal
+import os
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -237,7 +242,7 @@ class SpiceRecorder(GObject.GObject):
 
     @property
     def displays(self):
-        return iter(self._displays)
+        return list(self._displays)
 
     @property
     def elapsed_time(self):
@@ -268,6 +273,74 @@ class SpiceRecorder(GObject.GObject):
             self._spice_session.set_property("tls-port", str(tlsport))
 
         self._spice_session.connect()
+
+
+def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None):
+    ffmpeg_args = [
+        'ffmpeg',
+        '-loglevel', loglevel,
+        '-y',
+    ]
+
+    # Determine the output video resolution
+    maxw, maxh = 0, 0
+    for d in displays:
+        maxw = max(maxw, d.width)
+        maxh = max(maxh, d.height)
+
+    # Establish raw input files with their attributes
+    for d in displays:
+        ffmpeg_args += [
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-pix_fmt', d.ffmpeg_pix_fmt,
+            '-r', str(framerate),
+            '-an',
+            '-s', '{}x{}'.format(d.width, d.height),
+            '-i', d.outfile.name,   # TODO: "pipe:{fd}"
+        ]
+
+    # Build our complex filtergraph:
+    # 1) Create appropriately scaled versions of each input stream named [v{i}]
+    filters = []
+    for i,d in enumerate(displays):
+        # Explained:
+        #   [{i}:v]     Take the i'th input file's video stream,
+        #   scale=      Scale it to w x h, maintaining aspect ratio,
+        #               decreasing the output size if required to do so,
+        #   pad=        And if so, pad it out to w x h, centering it in the frame.
+        #   [v{i}]      Name the output stream [v{i}]
+        filt = '[{i}:v] scale={w}:{h}:force_original_aspect_ratio=decrease,' \
+                'pad={w}:{h}:(ow-iw)/2:(oh-ih)/2  [v{i}]'.format(
+                i=i, w=maxw, h=maxh)
+        filters.append(filt)
+
+    # 2) Concatenate the [v{i}] videos to [outv]
+    # Explained:
+    #   [v{i}]      Take each of the [v{i}] scaled streams,
+    #   concat=     concatenate all 'n' of them together into one video output.
+    #   [outv]      Name the output stream [outv]
+    filt = ' '.join('[v{i}]'.format(i=i) for i in range(len(displays)))
+    filt += 'concat=n={n}:v=1:a=0 [outv]'.format(n=len(displays))
+    filters.append(filt)
+
+
+    ffmpeg_args += [
+        # Apply the compex filtergraph
+        '-filter_complex', '; '.join(filters),
+
+        # Specify output video parameters
+        '-vcodec', outcodec,
+        '-pix_fmt', 'yuv420p',  # avoid warning
+
+        # Map the [outv] to the output file
+        '-map', '[outv]',
+        outpath
+    ]
+    logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
+    subprocess.check_call(ffmpeg_args)
+
+
 
 def logging_to_ffmpeg_loglevel(ll):
     return {
@@ -327,38 +400,32 @@ def main():
 
     print("-"*80)
     print("Recorded displays:")
+    maxw, maxh = 0, 0
     for n,d in enumerate(sp.displays):
         print("  {}: {}x{} {:>4} frames  {:>10}  {:0.02f} sec".format(n, d.width, d.height,
             d.frames_recorded,
             format_datasize(d.bytes_recorded),
             d.duration))
-
-
+        maxw = max(maxw, d.width)
+        maxh = max(maxh, d.height)
+    print("Final: {}x{}".format(maxw, maxh))
     print("-"*80)
-    return
+
 
     # Convert video
     print("\nDone recording. Converting...")
-    d = sp.display
-    rawf = d.outfile
-    rawf.seek(0)
-    ffmpeg_args = [
-        'ffmpeg',
-        '-loglevel', logging_to_ffmpeg_loglevel(args.loglevel),
-        '-y',
-        '-f', 'rawvideo',
-        '-vcodec', 'rawvideo',
-        '-s', '{}x{}'.format(d.width, d.height),
-        '-pix_fmt', d.ffmpeg_pix_fmt,
-        '-r', str(args.framerate),
-        '-i', '-',  # stdin
-        '-an',
-        '-vcodec', args.vcodec,
-        '-pix_fmt', 'yuv420p',  # avoid warning
-        args.output
-    ]
-    logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
-    subprocess.check_call(ffmpeg_args, stdin=rawf)
+    convert_concat_videos(
+            displays = sp.displays,
+            framerate = args.framerate,
+            outcodec = args.vcodec,
+            outpath = args.output,
+            loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
+            )
+
+    # TODO: Pass tempfile file descriptors to ffmpeg using -i pipe:{fd}.
+    # This requires passing close_fds=False.
+    # Note that we can't currently do this because the tempfiles were opened
+    # in a different process (thanks to MainLoop)!
 
 
 if __name__ == '__main__':
