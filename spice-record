@@ -427,6 +427,10 @@ def main():
     # Note that we can't currently do this because the tempfiles were opened
     # in a different process (thanks to MainLoop)!
 
+    print("\nCleaning up...")
+    for d in sp.displays:
+        os.unlink(d.outfile.name)
+
 
 if __name__ == '__main__':
     try:
