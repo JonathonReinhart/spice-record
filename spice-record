@@ -38,7 +38,7 @@ class SpiceSurfaceFmt(Enum):
 
 
 class Display(GObject.GObject):
-    def __init__(self, channel, width, height, stride, shmid, imgdata):
+    def __init__(self, channel, width, height, stride, shmid, imgdata, outfile):
         self.channel = channel
         self.width   = width
         self.height  = height
@@ -52,6 +52,11 @@ class Display(GObject.GObject):
         imgdata_bytes = stride * height
         self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * imgdata_bytes))
 
+
+        self.outfile = outfile
+
+
+
     @staticmethod
     def get_format_class(format):
         return {
@@ -60,15 +65,17 @@ class Display(GObject.GObject):
         }[format]
 
     def __repr__(self):
-        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, imgdata={})'.format(
-                type(self), self.channel, self.width, self.height, self.stride, self.shmid, self.imgdata)
+        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, ' \
+               'imgdata={}, outfile={})'.format(
+                type(self), self.channel, self.width, self.height, self.stride,
+                self.shmid, self.imgdata, self.outfile)
 
 class Display32RGB(Display):
     bytes_per_pixel = 4
     ffmpeg_pix_fmt = 'bgr0'     # Each pixel is 4 bytes: BGR0,BGR0,...
 
-    def write_frame(self, f):
-        return f.write(self.imgdata.contents)
+    def write_frame(self):
+        return self.outfile.write(self.imgdata.contents)
 
 
 class SpiceRecorder(GObject.GObject):
@@ -76,10 +83,9 @@ class SpiceRecorder(GObject.GObject):
         "periodic-update":  (GObject.SignalFlags.RUN_FIRST, None, []),
     }
 
-    def __init__(self, outfile, framerate=24):
+    def __init__(self, framerate=24):
         GObject.GObject.__init__(self)
 
-        self.outfile = outfile
         self.framerate = framerate
 
         self._spice_session = None
@@ -143,9 +149,11 @@ class SpiceRecorder(GObject.GObject):
 
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
-        logging.debug("display-primary-create channel=%s format=%s", channel, format)
+        logging.debug("display-primary-create channel=%s format=%s %dx%d", channel, format, width, height)
         assert not self._display
-        self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
+
+        rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw', delete=False)
+        self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
         logging.debug("_display: %s", self._display)
 
         self._start_time = time.time()
@@ -170,7 +178,7 @@ class SpiceRecorder(GObject.GObject):
         self._last_frame_t = now
 
         # Write the frame!
-        b = self._display.write_frame(self.outfile)
+        b = self._display.write_frame()
         self._num_frames_recorded += 1
         self._num_bytes_recorded += b
 
@@ -245,52 +253,53 @@ def main():
     logging.basicConfig(level=args.loglevel)
 
 
-    with tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw') as rawf:
-        # Record raw video
-        sp = SpiceRecorder(rawf, framerate=args.framerate)
-        sp.open_host()
+    # Record raw video
+    sp = SpiceRecorder(framerate=args.framerate)
+    sp.open_host()
 
-        def periodic_update(sp):
-            print("\r" + " "*80, end="")
-            print("\r{:<20}{:<20}{:<20}".format(
-                "{:0.02f} sec".format(sp.elapsed_time),
-                "{} frames".format(sp.frames_recorded),
-                format_datasize(sp.bytes_recorded),
-                ), end="")
-        sp.connect("periodic-update", periodic_update)
+    def periodic_update(sp):
+        print("\r" + " "*80, end="")
+        print("\r{:<20}{:<20}{:<20}".format(
+            "{:0.02f} sec".format(sp.elapsed_time),
+            "{} frames".format(sp.frames_recorded),
+            format_datasize(sp.bytes_recorded),
+            ), end="")
+    sp.connect("periodic-update", periodic_update)
 
-        loop = GLib.MainLoop()
+    loop = GLib.MainLoop()
 
-        def sigint_handler(signum, frame):
-            loop.quit()
-        old = signal.signal(signal.SIGINT, sigint_handler)
+    def sigint_handler(signum, frame):
+        print("INTERRUPT")
+        loop.quit()
+    old = signal.signal(signal.SIGINT, sigint_handler)
 
-        print("Recording... Press Ctrl+C to stop")
-        loop.run()
-        signal.signal(signal.SIGINT, old)
+    print("Recording... Press Ctrl+C to stop")
+    loop.run()
+    signal.signal(signal.SIGINT, old)
 
 
-        # Convert video
-        print("\nDone recording. Converting...")
-        rawf.seek(0)
-        d = sp._display
-        ffmpeg_args = [
-            'ffmpeg',
-            '-loglevel', logging_to_ffmpeg_loglevel(args.loglevel),
-            '-y',
-            '-f', 'rawvideo',
-            '-vcodec', 'rawvideo',
-            '-s', '{}x{}'.format(d.width, d.height),
-            '-pix_fmt', d.ffmpeg_pix_fmt,
-            '-r', str(args.framerate),
-            '-i', '-',  # stdin
-            '-an',
-            '-vcodec', args.vcodec,
-            '-pix_fmt', 'yuv420p',  # avoid warning
-            args.output
-        ]
-        logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
-        subprocess.check_call(ffmpeg_args, stdin=rawf)
+    # Convert video
+    print("\nDone recording. Converting...")
+    d = sp._display
+    rawf = d.outfile
+    rawf.seek(0)
+    ffmpeg_args = [
+        'ffmpeg',
+        '-loglevel', logging_to_ffmpeg_loglevel(args.loglevel),
+        '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-s', '{}x{}'.format(d.width, d.height),
+        '-pix_fmt', d.ffmpeg_pix_fmt,
+        '-r', str(args.framerate),
+        '-i', '-',  # stdin
+        '-an',
+        '-vcodec', args.vcodec,
+        '-pix_fmt', 'yuv420p',  # avoid warning
+        args.output
+    ]
+    logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
+    subprocess.check_call(ffmpeg_args, stdin=rawf)
 
 
 if __name__ == '__main__':
