@@ -89,7 +89,7 @@ class SpiceRecorder(GObject.GObject):
         self.framerate = framerate
 
         self._spice_session = None
-        self._display = None
+        self._displays = []
         self._main_channel = None
         self._display_channel = None
 
@@ -150,16 +150,19 @@ class SpiceRecorder(GObject.GObject):
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
         logging.debug("display-primary-create channel=%s format=%s %dx%d", channel, format, width, height)
-        assert not self._display
 
         rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw', delete=False)
-        self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
-        logging.debug("_display: %s", self._display)
+        d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
+        logging.debug("New display: %s", d)
+        self._displays.append(d)
 
         self._start_time = time.time()
         self._record_frame()
         GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
 
+    @property
+    def display(self):
+        return self._displays[-1] if self._displays else None
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
@@ -178,7 +181,7 @@ class SpiceRecorder(GObject.GObject):
         self._last_frame_t = now
 
         # Write the frame!
-        b = self._display.write_frame()
+        b = self.display.write_frame()
         self._num_frames_recorded += 1
         self._num_bytes_recorded += b
 
@@ -280,7 +283,7 @@ def main():
 
     # Convert video
     print("\nDone recording. Converting...")
-    d = sp._display
+    d = sp.display
     rawf = d.outfile
     rawf.seek(0)
     ffmpeg_args = [
