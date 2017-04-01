@@ -52,9 +52,12 @@ class Display(GObject.GObject):
         imgdata_bytes = stride * height
         self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * imgdata_bytes))
 
-
         self.outfile = outfile
 
+        self._start_time = time.time()
+        self._end_time = None
+        self._num_frames_recorded = 0
+        self._num_bytes_recorded = 0
 
 
     @staticmethod
@@ -70,11 +73,38 @@ class Display(GObject.GObject):
                 type(self), self.channel, self.width, self.height, self.stride,
                 self.shmid, self.imgdata, self.outfile)
 
+
+    def destroy(self):
+        # Doesn't actually destroy anything -- called on destroy callback
+        self.imgdata = None
+        self._end_time = time.time()
+
+    def write_frame(self):
+        assert self.imgdata
+        b = self._do_write_frame()
+        self._num_frames_recorded += 1
+        self._num_bytes_recorded += b
+        return b
+
+    @property
+    def frames_recorded(self):
+        return self._num_frames_recorded
+
+    @property
+    def bytes_recorded(self):
+        return self._num_bytes_recorded
+
+    @property
+    def duration(self):
+        end = self._end_time or time.time()
+        return end - self._start_time
+
+
 class Display32RGB(Display):
     bytes_per_pixel = 4
     ffmpeg_pix_fmt = 'bgr0'     # Each pixel is 4 bytes: BGR0,BGR0,...
 
-    def write_frame(self):
+    def _do_write_frame(self):
         return self.outfile.write(self.imgdata.contents)
 
 
@@ -89,9 +119,10 @@ class SpiceRecorder(GObject.GObject):
         self.framerate = framerate
 
         self._spice_session = None
-        self._displays = []
         self._main_channel = None
         self._display_channel = None
+        self._displays = []             # displays created, in chrono. order
+        self._active_display = None     # currently active display
 
         self._last_frame_t = None
 
@@ -150,22 +181,27 @@ class SpiceRecorder(GObject.GObject):
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
         logging.debug("display-primary-create channel=%s format=%s %dx%d", channel, format, width, height)
+        if self._active_display:
+            logging.warning("Hmm? _active_display is set: %s", self._active_display)
+            return
 
         rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw', delete=False)
         d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
         logging.debug("New display: %s", d)
+        self._active_display = d
         self._displays.append(d)
 
-        self._start_time = time.time()
-        self._record_frame()
-        GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
-
-    @property
-    def display(self):
-        return self._displays[-1] if self._displays else None
+        # First display?
+        if len(self._displays) == 1:
+            self._start_time = time.time()
+            self._record_frame()
+            GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
+
+        self._active_display.destroy()
+        self._active_display = None
 
     def _record_frame(self):
         now = time.time()
@@ -181,7 +217,7 @@ class SpiceRecorder(GObject.GObject):
         self._last_frame_t = now
 
         # Write the frame!
-        b = self.display.write_frame()
+        b = self._active_display.write_frame()
         self._num_frames_recorded += 1
         self._num_bytes_recorded += b
 
@@ -193,6 +229,10 @@ class SpiceRecorder(GObject.GObject):
             self._last_periodic_update_t = now
 
         return True
+
+    @property
+    def displays(self):
+        return iter(self._displays)
 
     @property
     def elapsed_time(self):
@@ -280,6 +320,17 @@ def main():
     loop.run()
     signal.signal(signal.SIGINT, old)
 
+    print("-"*80)
+    print("Recorded displays:")
+    for n,d in enumerate(sp.displays):
+        print("  {}: {}x{} {:>4} frames  {:>10}  {:0.02f} sec".format(n, d.width, d.height,
+            d.frames_recorded,
+            format_datasize(d.bytes_recorded),
+            d.duration))
+
+
+    print("-"*80)
+    return
 
     # Convert video
     print("\nDone recording. Converting...")
