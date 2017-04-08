@@ -20,6 +20,7 @@ import tempfile
 import subprocess
 import signal
 import os
+import sys
 import libvirt
 from uuid import UUID
 import xml.etree.ElementTree as ET
@@ -34,6 +35,11 @@ from gi.repository import SpiceClientGLib
 
 # Maximum framerate timer error allowance (percent of frame interval)
 FRAMERATE_ERR_LIMIT_PCT = 10.0
+
+class AppError(Exception):
+    def __init__(self, message, exit_code=2):
+        super().__init__(message)
+        self.exit_code = exit_code
 
 class SpiceSurfaceFmt(Enum):
     # spice-1/spice/enums.h
@@ -394,20 +400,26 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
 
 
 def lookup_domain(conn, key):
-    # Try ID
     try:
-        return conn.lookupByID(int(key))
-    except ValueError:
-        pass
+        # Try ID
+        try:
+            return conn.lookupByID(int(key))
+        except ValueError:
+            pass
 
-    # Try UUID
-    try:
-        return conn.lookupByUUID(UUID(key))
-    except ValueError:
-        pass
+        # Try UUID
+        try:
+            return conn.lookupByUUID(UUID(key))
+        except ValueError:
+            pass
 
-    # Try name
-    return conn.lookupByName(key)
+        # Try name
+        return conn.lookupByName(key)
+
+    except libvirt.libvirtError as err:
+        if err.get_error_code() != libvirt.VIR_ERR_NO_DOMAIN:
+            raise
+        raise AppError(str(err))
 
 
 def domain_extract_connect_info(domain):
@@ -476,6 +488,10 @@ def unique_filename(path):
         except FileExistsError:
             idx = 0 if (idx is None) else (idx + 1)
 
+def libvirt_err_handler(ignore, err):
+    if err[3] != libvirt.VIR_ERR_ERROR:
+        # Don't log libvirt errors: global error handler will do that
+        logging.warn("Non-error from libvirt: '%s'" % err[2])
 
 def logging_to_ffmpeg_loglevel(ll):
     return {
@@ -493,7 +509,7 @@ def parse_args():
     ap.add_argument('--vcodec', default='libx264',
             help='Set the output video codec (see "ffmpeg -encoders" for choices)')
     ap.add_argument('--loglevel', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-            help='Set the logging level', default='WARNING')
+            help='Set the logging level (default=WARNING)', default='WARNING')
     ap.add_argument('-r', '--framerate', type=int, default=24)
 
     # Libvirt options and domain
@@ -520,12 +536,14 @@ def main():
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
 
+    libvirt.registerErrorHandler(f=libvirt_err_handler, ctx=None)
+
     # Open libvirt connection
     logging.info("Opening connection to %s", args.libvirt_uri)
     conn = libvirt.open(args.libvirt_uri)   # read only access prevents virDomainOpenGraphicsFD
 
     # Try to get domain
-    dom = lookup_domain(conn, args.machine)     # TODO: Handle DomainNotFoundError
+    dom = lookup_domain(conn, args.machine)
     logging.info('Using domain "%s" (%s)', dom.name(), dom.UUIDString())
 
     if not args.output:
@@ -598,5 +616,10 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+        sys.exit(0)
     except KeyboardInterrupt:
         print("Exiting due to Ctrl+C")
+        sys.exit(0)
+    except AppError as err:
+        print(err)
+        sys.exit(err.exit_code)
