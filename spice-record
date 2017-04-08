@@ -459,6 +459,22 @@ def domain_wait(domain, target_state):
             printed = True
         time.sleep(0.1)         # TODO: Handle asynchronously: See virt_viewer_domain_event()
 
+def unique_filename(path):
+    base, ext = os.path.splitext(path)
+    idx = None
+
+    while True:
+        if idx is not None:
+            path = "{}_{}{}".format(base, idx, ext)
+        else:
+            path = base + ext
+
+        try:
+            f = open(path, 'x')
+            f.close()
+            return path
+        except FileExistsError:
+            idx = 0 if (idx is None) else (idx + 1)
 
 
 def logging_to_ffmpeg_loglevel(ll):
@@ -486,8 +502,8 @@ def parse_args():
     ap.add_argument('machine', metavar='DOMAIN-NAME|ID|UUID',
             help='Machine to record')
 
-    # TODO: Replace with -o and auto-generate name from domain
-    ap.add_argument('output')
+    ap.add_argument('-o', '--output', metavar='FILENAME',
+            help='Output filename (defaults to <domain-name>.mp4)')
 
     return ap.parse_args()
 
@@ -511,6 +527,9 @@ def main():
     # Try to get domain
     dom = lookup_domain(conn, args.machine)     # TODO: Handle DomainNotFoundError
     logging.info('Using domain "%s" (%s)', dom.name(), dom.UUIDString())
+
+    if not args.output:
+        args.output = unique_filename(dom.name() + '.mp4')
 
     domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
 
@@ -572,6 +591,8 @@ def main():
     print("\nCleaning up...")
     for d in sp.displays:
         os.unlink(d.outfile.name)
+
+    print("\n{} written!".format(args.output))
 
 
 if __name__ == '__main__':
