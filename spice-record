@@ -20,6 +20,10 @@ import tempfile
 import subprocess
 import signal
 import os
+import libvirt
+from uuid import UUID
+import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -118,8 +122,10 @@ class SpiceRecorder(GObject.GObject):
         "periodic-update":  (GObject.SignalFlags.RUN_FIRST, None, []),
     }
 
-    def __init__(self, framerate=24):
+    def __init__(self, domain, framerate=24):
         GObject.GObject.__init__(self)
+
+        self._vm = domain
 
         self.framerate = framerate
 
@@ -136,7 +142,24 @@ class SpiceRecorder(GObject.GObject):
         self._num_bytes_recorded = 0
         self._start_time = None
 
+    def _get_fd_for_open(self):
+        # Reference:
+        # https://github.com/virt-manager/virt-manager/blob/b8dccf6a/virtManager/viewers.py#L139
+
+        uri = urlparse(self._vm._conn.getURI())
+        if uri.hostname:
+            # OpenGraphics only works for local libvirtd connections
+            return None
+
+        # TODO: Additional checks -- see virt-manager Viewer._get_fd_for_open
+
+        fd = self._vm.openGraphicsFD(0,
+                libvirt.VIR_DOMAIN_OPEN_GRAPHICS_SKIPAUTH)
+        logging.debug('openGraphicsFD(0) returned %d', fd)
+        return fd
+
     def _create_spice_session(self):
+        assert not self._spice_session
         self._spice_session = SpiceClientGLib.Session(read_only=True)
         SpiceClientGLib.set_session_option(self._spice_session)
 
@@ -146,6 +169,9 @@ class SpiceRecorder(GObject.GObject):
     def _channel_new_cb(self, session, channel):
         logging.debug("New channel signal: channel=%s", channel)
 
+        GObject.GObject.connect(channel, "open-fd",
+                                self._channel_open_fd_request)
+
         # Dispatch
         cb = {
             SpiceClientGLib.MainChannel:    self._new_main_channel,
@@ -153,6 +179,13 @@ class SpiceRecorder(GObject.GObject):
         }.get(type(channel))
         if cb:
             cb(channel)
+
+    def _channel_open_fd_request(self, channel, tls_ignore):
+        logging.debug("Requesting fd for channel: %s", channel)
+
+        fd = self._get_fd_for_open()
+        channel.open_fd(fd)
+
 
     def _new_main_channel(self, channel):
             self._main_channel = channel
@@ -261,18 +294,37 @@ class SpiceRecorder(GObject.GObject):
             return None
         return self._display_channel.get_properties("width", "height")
 
-    def open_host(self, host='localhost', port=5900, tlsport=None):
+    def _open_fd(self, fd):
+        self._create_spice_session()
+
+        logging.debug("Spice connecting via fd=%d", fd)
+        self._spice_session.open_fd(fd)
+
+    def _open_host(self):
+        coninfo = domain_extract_connect_info(dom)
+
         self._create_spice_session()
 
         logging.debug("Spice connecting to host=%s port=%s tlsport=%s",
-            host, port, tlsport)
-        self._spice_session.set_property("host", str(host))
+            coninfo.ghost, coninfo.gport, coninfo.gtlsport)
+        self._spice_session.set_property("host", str(coninfo.ghost))
         if port:
-            self._spice_session.set_property("port", str(port))
+            self._spice_session.set_property("port", str(coninfo.gport))
         if tlsport:
-            self._spice_session.set_property("tls-port", str(tlsport))
+            self._spice_session.set_property("tls-port", str(coninfo.gtlsport))
 
         self._spice_session.connect()
+
+    def open(self):
+        # References:
+        #   - virt_viewer_open_connection()
+        #   - virt-manager Viewer._open
+
+        fd = self._get_fd_for_open()
+        if fd is not None:
+            self._open_fd(fd)
+        else:
+            self._open_host()
 
 
 def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None):
@@ -341,6 +393,73 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
     subprocess.check_call(ffmpeg_args)
 
 
+def lookup_domain(conn, key):
+    # Try ID
+    try:
+        return conn.lookupByID(int(key))
+    except ValueError:
+        pass
+
+    # Try UUID
+    try:
+        return conn.lookupByUUID(UUID(key))
+    except ValueError:
+        pass
+
+    # Try name
+    return conn.lookupByName(key)
+
+
+def domain_extract_connect_info(domain):
+    # See
+    #   virt_viewer_extract_connect_info()
+    #   virt_viewer_app_set_connect_info()
+    tree = ET.fromstring(domain.XMLDesc())
+    ET.dump(tree)
+
+    gfx = tree.find('devices/graphics')
+
+    class ConnectInfo:
+        pass
+    o = ConnectInfo()
+    o.type = gfx.get('type')
+    if o.type != 'spice':
+        raise ValueError('Graphics type "{}" not supported; must be "spice"'.format(o.type))
+
+    o.gport = gfx.get('port')
+    o.gtlsport = gfx.get('tlsport')
+    o.ghost = gfx.get('listen')
+    o.unixsock = gfx.get('socket')
+
+    if o.ghost and o.gport:
+        logging.info('Guest graphics address is {}:{}'.format(o.ghost, o.gport))
+    elif o.unixsock:
+        logging.info('Guest graphics address is {}'.format(o.unixsock))
+    else:
+        logging.info('Using direct libvirt connection')
+
+    uri = urlparse(domain._conn.getURI())
+    o.host = uri.hostname
+    o.transport = uri.scheme
+    o.user = uri.username
+    o.password = uri.password
+    o.port = uri.port
+
+    return o
+
+
+def domain_wait(domain, target_state):
+    printed = False
+    while True:
+        state, reason = domain.state()
+        if state == target_state:
+            break
+        if not printed:
+            print("Waiting for domain to enter state {}".format(target_state))
+            printed = True
+        time.sleep(0.1)         # TODO: Handle asynchronously: See virt_viewer_domain_event()
+
+
 
 def logging_to_ffmpeg_loglevel(ll):
     return {
@@ -353,13 +472,25 @@ def logging_to_ffmpeg_loglevel(ll):
 
 def parse_args():
     ap = argparse.ArgumentParser()
-    ap.add_argument('output')
+
+    # Recording options
     ap.add_argument('--vcodec', default='libx264',
             help='Set the output video codec (see "ffmpeg -encoders" for choices)')
     ap.add_argument('--loglevel', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
             help='Set the logging level', default='WARNING')
     ap.add_argument('-r', '--framerate', type=int, default=24)
+
+    # Libvirt options and domain
+    ap.add_argument('-c', '--connect', dest='libvirt_uri',
+            help='Connect to hypervisor (e.g. qemu:///system)')
+    ap.add_argument('machine', metavar='DOMAIN-NAME|ID|UUID',
+            help='Machine to record')
+
+    # TODO: Replace with -o and auto-generate name from domain
+    ap.add_argument('output')
+
     return ap.parse_args()
+
 
 def format_datasize(b):
     suffixes = ['', 'ki', 'Mi', 'Gi', 'Ti']
@@ -373,11 +504,22 @@ def main():
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
 
+    # Open libvirt connection
+    logging.info("Opening connection to %s", args.libvirt_uri)
+    conn = libvirt.open(args.libvirt_uri)   # read only access prevents virDomainOpenGraphicsFD
+
+    # Try to get domain
+    dom = lookup_domain(conn, args.machine)     # TODO: Handle DomainNotFoundError
+    logging.info('Using domain "%s" (%s)', dom.name(), dom.UUIDString())
+
+    domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
+
+    #############
+    # Open spice session
+    sp = SpiceRecorder(dom, framerate=args.framerate)
+    sp.open()
 
     # Record raw video
-    sp = SpiceRecorder(framerate=args.framerate)
-    sp.open_host()
-
     def periodic_update(sp):
         print("\r" + " "*80, end="")
         print("\r{:<20}{:<20}{:<20}".format(
