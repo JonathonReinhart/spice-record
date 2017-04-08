@@ -7,6 +7,10 @@
 # - https://linuxtv.org/downloads/v4l-dvb-apis/uapi/v4l/pixfmt-packed-rgb.html
 # - http://zulko.github.io/blog/2013/09/27/read-and-write-video-frames-in-python-using-ffmpeg/
 # - https://msdn.microsoft.com/en-us/library/windows/desktop/aa473780.aspx
+# - https://superuser.com/a/1136854/101823
+# - https://ffmpeg.org/ffmpeg-filters.html
+# - https://ffmpeg.org/ffmpeg-filters.html#scale
+# - https://ffmpeg.org/ffmpeg-filters.html#concat
 import argparse
 import logging
 import time
@@ -15,6 +19,7 @@ from enum import Enum
 import tempfile
 import subprocess
 import signal
+import os
 
 from gi.repository import GLib
 from gi.repository import GObject
@@ -38,7 +43,7 @@ class SpiceSurfaceFmt(Enum):
 
 
 class Display(GObject.GObject):
-    def __init__(self, channel, width, height, stride, shmid, imgdata):
+    def __init__(self, channel, width, height, stride, shmid, imgdata, outfile):
         self.channel = channel
         self.width   = width
         self.height  = height
@@ -52,6 +57,14 @@ class Display(GObject.GObject):
         imgdata_bytes = stride * height
         self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * imgdata_bytes))
 
+        self.outfile = outfile
+
+        self._start_time = time.time()
+        self._end_time = None
+        self._num_frames_recorded = 0
+        self._num_bytes_recorded = 0
+
+
     @staticmethod
     def get_format_class(format):
         return {
@@ -60,15 +73,44 @@ class Display(GObject.GObject):
         }[format]
 
     def __repr__(self):
-        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, imgdata={})'.format(
-                type(self), self.channel, self.width, self.height, self.stride, self.shmid, self.imgdata)
+        return '{}(channel={}, width={}, height={}, stride={}, shmid={}, ' \
+               'imgdata={}, outfile={})'.format(
+                type(self), self.channel, self.width, self.height, self.stride,
+                self.shmid, self.imgdata, self.outfile)
+
+
+    def destroy(self):
+        # Doesn't actually destroy anything -- called on destroy callback
+        self.imgdata = None
+        self._end_time = time.time()
+
+    def write_frame(self):
+        assert self.imgdata
+        b = self._do_write_frame()
+        self._num_frames_recorded += 1
+        self._num_bytes_recorded += b
+        return b
+
+    @property
+    def frames_recorded(self):
+        return self._num_frames_recorded
+
+    @property
+    def bytes_recorded(self):
+        return self._num_bytes_recorded
+
+    @property
+    def duration(self):
+        end = self._end_time or time.time()
+        return end - self._start_time
+
 
 class Display32RGB(Display):
     bytes_per_pixel = 4
     ffmpeg_pix_fmt = 'bgr0'     # Each pixel is 4 bytes: BGR0,BGR0,...
 
-    def write_frame(self, f):
-        return f.write(self.imgdata.contents)
+    def _do_write_frame(self):
+        return self.outfile.write(self.imgdata.contents)
 
 
 class SpiceRecorder(GObject.GObject):
@@ -76,16 +118,16 @@ class SpiceRecorder(GObject.GObject):
         "periodic-update":  (GObject.SignalFlags.RUN_FIRST, None, []),
     }
 
-    def __init__(self, outfile, framerate=24):
+    def __init__(self, framerate=24):
         GObject.GObject.__init__(self)
 
-        self.outfile = outfile
         self.framerate = framerate
 
         self._spice_session = None
-        self._display = None
         self._main_channel = None
         self._display_channel = None
+        self._displays = []             # displays created, in chrono. order
+        self._active_display = None     # currently active display
 
         self._last_frame_t = None
 
@@ -143,18 +185,29 @@ class SpiceRecorder(GObject.GObject):
 
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
-        logging.debug("display-primary-create channel=%s format=%s", channel, format)
-        assert not self._display
-        self._display = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata)
-        logging.debug("_display: %s", self._display)
+        logging.debug("display-primary-create channel=%s format=%s %dx%d", channel, format, width, height)
+        if self._active_display:
+            logging.warning("Hmm? _active_display is set: %s", self._active_display)
+            return
 
-        self._start_time = time.time()
-        self._record_frame()
-        GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
+        rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-',
+                suffix='{}x{}.raw'.format(width, height), delete=False)
+        d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
+        logging.debug("New display: %s", d)
+        self._active_display = d
+        self._displays.append(d)
 
+        # First display?
+        if len(self._displays) == 1:
+            self._start_time = time.time()
+            self._record_frame()
+            GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
+
+        self._active_display.destroy()
+        self._active_display = None
 
     def _record_frame(self):
         now = time.time()
@@ -169,8 +222,12 @@ class SpiceRecorder(GObject.GObject):
                 logging.warning("Framerate error exceeds threshold: dt={} err={} ({}%)".format(dt, err, err_pct))
         self._last_frame_t = now
 
+        # Ugh, can we miss frames here while there is no display?
+        if not self._active_display:
+            return
+
         # Write the frame!
-        b = self._display.write_frame(self.outfile)
+        b = self._active_display.write_frame()
         self._num_frames_recorded += 1
         self._num_bytes_recorded += b
 
@@ -182,6 +239,10 @@ class SpiceRecorder(GObject.GObject):
             self._last_periodic_update_t = now
 
         return True
+
+    @property
+    def displays(self):
+        return list(self._displays)
 
     @property
     def elapsed_time(self):
@@ -212,6 +273,74 @@ class SpiceRecorder(GObject.GObject):
             self._spice_session.set_property("tls-port", str(tlsport))
 
         self._spice_session.connect()
+
+
+def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None):
+    ffmpeg_args = [
+        'ffmpeg',
+        '-loglevel', loglevel,
+        '-y',
+    ]
+
+    # Determine the output video resolution
+    maxw, maxh = 0, 0
+    for d in displays:
+        maxw = max(maxw, d.width)
+        maxh = max(maxh, d.height)
+
+    # Establish raw input files with their attributes
+    for d in displays:
+        ffmpeg_args += [
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-pix_fmt', d.ffmpeg_pix_fmt,
+            '-r', str(framerate),
+            '-an',
+            '-s', '{}x{}'.format(d.width, d.height),
+            '-i', d.outfile.name,   # TODO: "pipe:{fd}"
+        ]
+
+    # Build our complex filtergraph:
+    # 1) Create appropriately scaled versions of each input stream named [v{i}]
+    filters = []
+    for i,d in enumerate(displays):
+        # Explained:
+        #   [{i}:v]     Take the i'th input file's video stream,
+        #   scale=      Scale it to w x h, maintaining aspect ratio,
+        #               decreasing the output size if required to do so,
+        #   pad=        And if so, pad it out to w x h, centering it in the frame.
+        #   [v{i}]      Name the output stream [v{i}]
+        filt = '[{i}:v] scale={w}:{h}:force_original_aspect_ratio=decrease,' \
+                'pad={w}:{h}:(ow-iw)/2:(oh-ih)/2  [v{i}]'.format(
+                i=i, w=maxw, h=maxh)
+        filters.append(filt)
+
+    # 2) Concatenate the [v{i}] videos to [outv]
+    # Explained:
+    #   [v{i}]      Take each of the [v{i}] scaled streams,
+    #   concat=     concatenate all 'n' of them together into one video output.
+    #   [outv]      Name the output stream [outv]
+    filt = ' '.join('[v{i}]'.format(i=i) for i in range(len(displays)))
+    filt += 'concat=n={n}:v=1:a=0 [outv]'.format(n=len(displays))
+    filters.append(filt)
+
+
+    ffmpeg_args += [
+        # Apply the compex filtergraph
+        '-filter_complex', '; '.join(filters),
+
+        # Specify output video parameters
+        '-vcodec', outcodec,
+        '-pix_fmt', 'yuv420p',  # avoid warning
+
+        # Map the [outv] to the output file
+        '-map', '[outv]',
+        outpath
+    ]
+    logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
+    subprocess.check_call(ffmpeg_args)
+
+
 
 def logging_to_ffmpeg_loglevel(ll):
     return {
@@ -245,52 +374,62 @@ def main():
     logging.basicConfig(level=args.loglevel)
 
 
-    with tempfile.NamedTemporaryFile('w+b', prefix='spice-record-', suffix='.raw') as rawf:
-        # Record raw video
-        sp = SpiceRecorder(rawf, framerate=args.framerate)
-        sp.open_host()
+    # Record raw video
+    sp = SpiceRecorder(framerate=args.framerate)
+    sp.open_host()
 
-        def periodic_update(sp):
-            print("\r" + " "*80, end="")
-            print("\r{:<20}{:<20}{:<20}".format(
-                "{:0.02f} sec".format(sp.elapsed_time),
-                "{} frames".format(sp.frames_recorded),
-                format_datasize(sp.bytes_recorded),
-                ), end="")
-        sp.connect("periodic-update", periodic_update)
+    def periodic_update(sp):
+        print("\r" + " "*80, end="")
+        print("\r{:<20}{:<20}{:<20}".format(
+            "{:0.02f} sec".format(sp.elapsed_time),
+            "{} frames".format(sp.frames_recorded),
+            format_datasize(sp.bytes_recorded),
+            ), end="")
+    sp.connect("periodic-update", periodic_update)
 
-        loop = GLib.MainLoop()
+    loop = GLib.MainLoop()
 
-        def sigint_handler(signum, frame):
-            loop.quit()
-        old = signal.signal(signal.SIGINT, sigint_handler)
+    def sigint_handler(signum, frame):
+        print("INTERRUPT")
+        loop.quit()
+    old = signal.signal(signal.SIGINT, sigint_handler)
 
-        print("Recording... Press Ctrl+C to stop")
-        loop.run()
-        signal.signal(signal.SIGINT, old)
+    print("Recording... Press Ctrl+C to stop")
+    loop.run()
+    signal.signal(signal.SIGINT, old)
+
+    print("-"*80)
+    print("Recorded displays:")
+    maxw, maxh = 0, 0
+    for n,d in enumerate(sp.displays):
+        print("  {}: {}x{} {:>4} frames  {:>10}  {:0.02f} sec".format(n, d.width, d.height,
+            d.frames_recorded,
+            format_datasize(d.bytes_recorded),
+            d.duration))
+        maxw = max(maxw, d.width)
+        maxh = max(maxh, d.height)
+    print("Final: {}x{}".format(maxw, maxh))
+    print("-"*80)
 
 
-        # Convert video
-        print("\nDone recording. Converting...")
-        rawf.seek(0)
-        d = sp._display
-        ffmpeg_args = [
-            'ffmpeg',
-            '-loglevel', logging_to_ffmpeg_loglevel(args.loglevel),
-            '-y',
-            '-f', 'rawvideo',
-            '-vcodec', 'rawvideo',
-            '-s', '{}x{}'.format(d.width, d.height),
-            '-pix_fmt', d.ffmpeg_pix_fmt,
-            '-r', str(args.framerate),
-            '-i', '-',  # stdin
-            '-an',
-            '-vcodec', args.vcodec,
-            '-pix_fmt', 'yuv420p',  # avoid warning
-            args.output
-        ]
-        logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
-        subprocess.check_call(ffmpeg_args, stdin=rawf)
+    # Convert video
+    print("\nDone recording. Converting...")
+    convert_concat_videos(
+            displays = sp.displays,
+            framerate = args.framerate,
+            outcodec = args.vcodec,
+            outpath = args.output,
+            loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
+            )
+
+    # TODO: Pass tempfile file descriptors to ffmpeg using -i pipe:{fd}.
+    # This requires passing close_fds=False.
+    # Note that we can't currently do this because the tempfiles were opened
+    # in a different process (thanks to MainLoop)!
+
+    print("\nCleaning up...")
+    for d in sp.displays:
+        os.unlink(d.outfile.name)
 
 
 if __name__ == '__main__':
