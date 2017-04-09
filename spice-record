@@ -22,6 +22,7 @@ import signal
 import os
 import sys
 import libvirt
+import termios
 from uuid import UUID
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
@@ -132,6 +133,7 @@ class SpiceRecorder(GObject.GObject):
         GObject.GObject.__init__(self)
 
         self._vm = domain
+        self._mainloop = GLib.MainLoop()
 
         self.framerate = framerate
 
@@ -147,6 +149,7 @@ class SpiceRecorder(GObject.GObject):
         self._num_frames_recorded = 0
         self._num_bytes_recorded = 0
         self._start_time = None
+        self._record_timeout_id = None
 
     def _get_fd_for_open(self):
         # Reference:
@@ -236,17 +239,37 @@ class SpiceRecorder(GObject.GObject):
         self._active_display = d
         self._displays.append(d)
 
-        # First display?
-        if len(self._displays) == 1:
-            self._start_time = time.time()
-            self._record_frame()
-            GLib.timeout_add(int(1000 / self.framerate), self._record_frame)
+        self._start_recording()
+
 
     def _display_primary_destroy_cb(self, channel):
         logging.debug("display-primary-destroy channel %s", channel)
 
         self._active_display.destroy()
         self._active_display = None
+
+    def _start_recording(self):
+        if self._record_timeout_id != None:
+            return
+
+        self._start_time = time.time()
+        self._record_frame()
+        self._record_timeout_id = GLib.timeout_add(
+                int(1000 / self.framerate), self._record_frame)
+        logging.debug('_record_timeout_id = %d', self._record_timeout_id)
+
+        id_ = GLib.io_add_watch(
+                sys.stdin,
+                GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN,
+                self._stdin_avail_cb,
+                )
+
+    def _stop_recording(self):
+        logging.debug('Removing _record_timeout_id = %d', self._record_timeout_id)
+        GLib.source_remove(self._record_timeout_id)
+        self._record_timeout_id = None
+        self._mainloop.quit()
 
     def _record_frame(self):
         now = time.time()
@@ -276,6 +299,16 @@ class SpiceRecorder(GObject.GObject):
         if not self._last_periodic_update_t or (dt > 1.0):
             self.emit("periodic-update")
             self._last_periodic_update_t = now
+
+        return True
+
+    def _stdin_avail_cb(self, cond, *data):
+        for c in sys.stdin.read():
+            c = c.upper()
+
+            if c == 'Q':
+                logging.info('Stopping on "Q" press')
+                self._stop_recording()
 
         return True
 
@@ -331,6 +364,13 @@ class SpiceRecorder(GObject.GObject):
             self._open_fd(fd)
         else:
             self._open_host()
+
+    def run(self):
+        self._mainloop.run()
+
+    def stop(self):
+        logging.debug("Calling _mainloop.quit()")
+        self._mainloop.quit()
 
 
 def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None):
@@ -494,6 +534,31 @@ def unique_filename(path):
         except FileExistsError:
             idx = 0 if (idx is None) else (idx + 1)
 
+class TtyCbreakMode:
+    LFLAG = 3
+    CC = 6
+    def __init__(self):
+        self.orig_mode = None
+
+    def __enter__(self):
+        if sys.stdin.isatty():
+            # Similar to tty.setcbreak()
+            t = termios
+            self.orig_mode = t.tcgetattr(sys.stdin.fileno())
+
+            mode = t.tcgetattr(sys.stdin.fileno())
+            mode[self.LFLAG] &= ~(t.ECHO | t.ICANON)
+            mode[self.CC][t.VMIN] = 0
+            mode[self.CC][t.VTIME] = 0
+            t.tcsetattr(sys.stdin.fileno(), t.TCSADRAIN, mode)
+        return self
+
+    def __exit__(self, *excinfo):
+        if self.orig_mode is not None:
+            t = termios
+            t.tcsetattr(sys.stdin.fileno(), t.TCSADRAIN, self.orig_mode)
+
+
 def libvirt_err_handler(ignore, err):
     if err[3] != libvirt.VIR_ERR_ERROR:
         # Don't log libvirt errors: global error handler will do that
@@ -557,31 +622,25 @@ def main():
 
     domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
 
-    #############
-    # Open spice session
-    sp = SpiceRecorder(dom, framerate=args.framerate)
-    sp.open()
+    with TtyCbreakMode():
+        # Open spice session
+        sp = SpiceRecorder(dom, framerate=args.framerate)
+        sp.open()
 
-    # Record raw video
-    def periodic_update(sp):
-        print("\r" + " "*80, end="")
-        print("\r{:<20}{:<20}{:<20}".format(
-            "{:0.02f} sec".format(sp.elapsed_time),
-            "{} frames".format(sp.frames_recorded),
-            format_datasize(sp.bytes_recorded),
-            ), end="")
-    sp.connect("periodic-update", periodic_update)
+        # Record raw video
+        def periodic_update(sp):
+            print("\r" + " "*80, end="")
+            print("\r{:<20}{:<20}{:<20}".format(
+                "{:0.02f} sec".format(sp.elapsed_time),
+                "{} frames".format(sp.frames_recorded),
+                format_datasize(sp.bytes_recorded),
+                ), end="")
 
-    loop = GLib.MainLoop()
+        sp.connect("periodic-update", periodic_update)
 
-    def sigint_handler(signum, frame):
-        print("INTERRUPT")
-        loop.quit()
-    old = signal.signal(signal.SIGINT, sigint_handler)
+        print("Recording... Press Q to stop")
+        sp.run()
 
-    print("Recording... Press Ctrl+C to stop")
-    loop.run()
-    signal.signal(signal.SIGINT, old)
 
     print("-"*80)
     print("Recorded displays:")
@@ -625,7 +684,7 @@ if __name__ == '__main__':
         sys.exit(0)
     except KeyboardInterrupt:
         print("Exiting due to Ctrl+C")
-        sys.exit(0)
+        sys.exit(1)
     except AppError as err:
         print(err)
         sys.exit(err.exit_code)
