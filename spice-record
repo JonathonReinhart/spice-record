@@ -34,6 +34,8 @@ import gi
 gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
+__version__ = '0.1.0'
+
 # Maximum framerate timer error allowance (percent of frame interval)
 FRAMERATE_ERR_LIMIT_PCT = 10.0
 
@@ -600,6 +602,8 @@ def parse_args():
 
     ap.add_argument('-o', '--output', metavar='FILENAME',
             help='Output filename (defaults to <domain-name>.mp4)')
+    ap.add_argument('-v', '--version', action='version',
+            version='spice-record ' + __version__)
 
     return ap.parse_args()
 
