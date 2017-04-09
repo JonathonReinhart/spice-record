@@ -38,5 +38,14 @@ If `virt-manager` is installed on a modern distro (which has ported all of its
 Python apps to Python 3), then everything should already be installed, aside
 from `ffmpeg`.
 
+## Notes
+Currently, the spice server only supports a single client connection. When
+another connection is opened, the current one is disconnected. Thus, this
+utility is limited in its usability as it cannot record a user interacting with
+the VM, and only an automatic ongoing process. There is however, an
+experimental feature to enable [multiple concurrent
+connections][MultipleClients] to a single spice server.
+
 [spice-record]: https://github.com/JonathonReinhart/spice-record
 [SPICE]: https://www.spice-space.org/
+[MultipleClients]: https://www.spice-space.org/page/Features/MultipleClients
