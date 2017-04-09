@@ -346,6 +346,12 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
         maxw = max(maxw, d.width)
         maxh = max(maxh, d.height)
 
+    # The FFmpeg 'pad' filter can't handle odd sizes, ensure they're even
+    def align(x, align):
+        return (x + align - 1) & ~(align - 1)
+    maxw = align(maxw, 2)
+    maxh = align(maxh, 2)
+
     # Establish raw input files with their attributes
     for d in displays:
         ffmpeg_args += [
