@@ -126,7 +126,8 @@ class Display32RGB(Display):
 
 class SpiceRecorder(GObject.GObject):
     __gsignals__ = {
-        "periodic-update":  (GObject.SignalFlags.RUN_FIRST, None, []),
+        "periodic-update":      (GObject.SignalFlags.RUN_FIRST, None, []),
+        "recording-stopped":    (GObject.SignalFlags.RUN_FIRST, None, [str]),
     }
 
     def __init__(self, domain, framerate=24):
@@ -223,7 +224,11 @@ class SpiceRecorder(GObject.GObject):
 
 
     def _main_channel_event_cb(self, channel, event):
-        logging.debug("Main channel %s event %s", channel, event)
+        logging.debug("Main channel %s event (%d) %s ", channel, event, event)
+
+        if event == SpiceClientGLib.ChannelEvent.CLOSED:
+            logging.debug('Main channel closed')
+            self._stop_recording("Disconnected")
 
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
@@ -265,11 +270,15 @@ class SpiceRecorder(GObject.GObject):
                 self._stdin_avail_cb,
                 )
 
-    def _stop_recording(self):
+    def _stop_recording(self, reason=""):
         logging.debug('Removing _record_timeout_id = %d', self._record_timeout_id)
+
         GLib.source_remove(self._record_timeout_id)
         self._record_timeout_id = None
+
+        self.emit("recording-stopped", reason)
         self._mainloop.quit()
+
 
     def _record_frame(self):
         now = time.time()
@@ -308,7 +317,7 @@ class SpiceRecorder(GObject.GObject):
 
             if c == 'Q':
                 logging.info('Stopping on "Q" press')
-                self._stop_recording()
+                self._stop_recording("Requested by user")
 
         return True
 
@@ -636,7 +645,11 @@ def main():
                 format_datasize(sp.bytes_recorded),
                 ), end="")
 
+        def on_stopped(sp, msg):
+            print("\nRecording stopped:", msg)
+
         sp.connect("periodic-update", periodic_update)
+        sp.connect("recording-stopped", on_stopped)
 
         print("Recording... Press Q to stop")
         sp.run()
