@@ -132,7 +132,7 @@ class SpiceRecorder(GObject.GObject):
         "recording-stopped":    (GObject.SignalFlags.RUN_FIRST, None, [str]),
     }
 
-    def __init__(self, domain, framerate=24):
+    def __init__(self, domain, framerate=24, create_display_stream=None):
         GObject.GObject.__init__(self)
 
         self._vm = domain
@@ -153,6 +153,8 @@ class SpiceRecorder(GObject.GObject):
         self._num_bytes_recorded = 0
         self._start_time = None
         self._record_timeout_id = None
+
+        self._create_display_stream = create_display_stream or self._create_display_tmpfile
 
     def _get_fd_for_open(self):
         # Reference:
@@ -232,6 +234,10 @@ class SpiceRecorder(GObject.GObject):
             logging.debug('Main channel closed')
             self._stop_recording("Disconnected")
 
+    def _create_display_tmpfile(self, width, height):
+        return tempfile.NamedTemporaryFile('w+b', prefix='spice-record-',
+                suffix='{}x{}.raw'.format(width, height), delete=False)
+
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
         logging.debug("display-primary-create channel=%s format=%s %dx%d", channel, format, width, height)
@@ -239,9 +245,8 @@ class SpiceRecorder(GObject.GObject):
             logging.warning("Hmm? _active_display is set: %s", self._active_display)
             return
 
-        rawf = tempfile.NamedTemporaryFile('w+b', prefix='spice-record-',
-                suffix='{}x{}.raw'.format(width, height), delete=False)
-        d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, rawf)
+        outf = self._create_display_stream(width, height)
+        d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, outf)
         logging.debug("New display: %s", d)
         self._active_display = d
         self._displays.append(d)
