@@ -70,7 +70,7 @@ class Display(GObject.GObject):
         imgdata_bytes = stride * height
         self.imgdata = ctypes.cast(imgdata, ctypes.POINTER(ctypes.c_ubyte * imgdata_bytes))
 
-        self.outfile = outfile
+        self.outfile = outfile(self) if callable(outfile) else outfile
 
         self._start_time = time.time()
         self._end_time = None
@@ -234,9 +234,9 @@ class SpiceRecorder(GObject.GObject):
             logging.debug('Main channel closed')
             self._stop_recording("Disconnected")
 
-    def _create_display_tmpfile(self, width, height):
+    def _create_display_tmpfile(self, display):
         return tempfile.NamedTemporaryFile('w+b', prefix='spice-record-',
-                suffix='{}x{}.raw'.format(width, height), delete=False)
+                suffix='{}x{}.raw'.format(display.width, display.height), delete=False)
 
     def _display_primary_create_cb(self, channel, format, width, height, stride, shmid, imgdata):
         format = SpiceSurfaceFmt(format)
@@ -245,7 +245,7 @@ class SpiceRecorder(GObject.GObject):
             logging.warning("Hmm? _active_display is set: %s", self._active_display)
             return
 
-        outf = self._create_display_stream(width, height)
+        outf = self._create_display_stream
         d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, outf)
         logging.debug("New display: %s", d)
         self._active_display = d
