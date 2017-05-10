@@ -332,6 +332,10 @@ class SpiceRecorder(GObject.GObject):
     def frames_recorded(self):
         return self._num_frames_recorded
 
+    @property
+    def bytes_recorded(self):
+        return sum(getsize_or_zero(d.outfile.name) for d in self.displays)
+
     def get_resolution(self):
         if not self._display_channel:
             return None
@@ -375,6 +379,13 @@ class SpiceRecorder(GObject.GObject):
     def stop(self):
         logging.debug("Calling _mainloop.quit()")
         self._mainloop.quit()
+
+
+def getsize_or_zero(path):
+    try:
+        return os.path.getsize(path)
+    except FileNotFoundError:
+        return 0
 
 
 def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None):
@@ -689,9 +700,10 @@ def main():
         # Record raw video
         def periodic_update(sp):
             print("\r" + " "*80, end="")
-            print("\r{:<20}{:<20}".format(
+            print("\r{:<20}{:<20}{:<20}".format(
                 "{:0.02f} sec".format(sp.elapsed_time),
                 "{} frames".format(sp.frames_recorded),
+                format_datasize(sp.bytes_recorded),
                 ), end="")
 
         def on_stopped(sp, msg):
