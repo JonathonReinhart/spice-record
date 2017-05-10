@@ -21,6 +21,7 @@ import subprocess
 import signal
 import os
 import sys
+import shutil
 import libvirt
 import termios
 from uuid import UUID
@@ -735,20 +736,30 @@ def main():
     print("-"*80)
 
 
-    # Convert video
-    print("\nDone recording. Converting...")
-    convert_concat_videos(
-            displays = sp.displays,
-            framerate = args.framerate,
-            outcodec = args.vcodec,
-            outpath = args.output,
-            loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
-            )
+    if len(sp.displays) == 1:
+        # Optimization: use the only intermediate video as the final
+        d = sp.displays[0]
+        src = d.outfile.name
+        d.outfile = None
+        logging.info("Moving {} to {}".format(src, args.output))
+        shutil.move(src, args.output)
+
+    else:
+        # Convert video
+        print("\nDone recording. Converting...")
+        convert_concat_videos(
+                displays = sp.displays,
+                framerate = args.framerate,
+                outcodec = args.vcodec,
+                outpath = args.output,
+                loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
+                )
 
     # Clean up
     print("\nCleaning up...")
     for d in sp.displays:
-        os.unlink(d.outfile.name)
+        if d.outfile:
+            os.unlink(d.outfile.name)
 
     print("\n{} written!".format(args.output))
 
