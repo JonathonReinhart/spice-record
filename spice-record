@@ -408,16 +408,10 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
     maxw = align(maxw, 2)
     maxh = align(maxh, 2)
 
-    # Establish raw input files with their attributes
+    # Establish temporary mp4 input files
     for d in displays:
         ffmpeg_args += [
-            '-f', 'rawvideo',
-            '-vcodec', 'rawvideo',
-            '-pix_fmt', d.ffmpeg_pix_fmt,
-            '-r', str(framerate),
-            '-an',
-            '-s', '{}x{}'.format(d.width, d.height),
-            '-i', d.outfile.name,   # TODO: "pipe:{fd}"
+            '-i', d.outfile.name,
         ]
 
     # Build our complex filtergraph:
@@ -459,6 +453,55 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
     ]
     logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
     subprocess.check_call(ffmpeg_args)
+
+
+class FFmpegRawStream:
+    """A stream of raw video to an FFMPEG process"""
+
+    def __init__(self, display, framerate, outcodec, loglevel):
+        with tempfile.NamedTemporaryFile(
+                prefix='spice-record-',
+                suffix='{}x{}.mp4'.format(display.width, display.height),
+                ) as f:
+            self.path = f.name
+
+        args = [
+        ffmpeg_args = [
+            'ffmpeg',
+            '-loglevel', loglevel,
+
+            # Input file
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-pix_fmt', display.ffmpeg_pix_fmt,
+            '-r', str(framerate),
+            '-an',
+            '-s', '{}x{}'.format(display.width, display.height),
+            '-i', 'pipe:0',     # stdin
+
+            # Specify output video parameters
+            '-vcodec', outcodec,
+            '-pix_fmt', 'yuv420p',  # avoid warning
+
+            # Ouptut file,
+            self.path,
+        ]
+        logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
+        self.p = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE)
+
+    @property
+    def name(self):
+        # Mimics NamedTemporaryFile.name
+        return self.path
+
+    def write(self, data):
+        return self.p.stdin.write(data)
+
+    def close(self):
+        self.p.stdin.close()
+        rc = self.p.wait()
+        if rc != 0:
+            raise subprocess.CalledProcessError(rc, 'ffmpeg')
 
 
 def lookup_domain(conn, key):
@@ -640,9 +683,19 @@ def main():
 
     domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
 
+    def create_ffmpeg_stream(display):
+        return FFmpegRawStream(display,
+            framerate = args.framerate,
+            outcodec = args.vcodec,
+            loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
+            )
+
     with TtyCbreakMode():
         # Open spice session
-        sp = SpiceRecorder(dom, framerate=args.framerate)
+        sp = SpiceRecorder(dom,
+                framerate = args.framerate,
+                create_display_stream = create_ffmpeg_stream,
+                )
         sp.open()
 
         # Record raw video
@@ -664,13 +717,18 @@ def main():
         sp.run()
 
 
+    # Finalize all intermediate FFmpeg processes
+    for d in sp.displays:
+        rc = d.outfile.close()
+
+
     print("-"*80)
     print("Recorded displays:")
     maxw, maxh = 0, 0
     for n,d in enumerate(sp.displays):
         print("  {}: {}x{} {:>4} frames  {:>10}  {:0.02f} sec".format(n, d.width, d.height,
             d.frames_recorded,
-            format_datasize(d.bytes_recorded),
+            format_datasize(os.path.getsize(d.outfile.name)),
             d.duration))
         maxw = max(maxw, d.width)
         maxh = max(maxh, d.height)
@@ -688,11 +746,7 @@ def main():
             loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
             )
 
-    # TODO: Pass tempfile file descriptors to ffmpeg using -i pipe:{fd}.
-    # This requires passing close_fds=False.
-    # Note that we can't currently do this because the tempfiles were opened
-    # in a different process (thanks to MainLoop)!
-
+    # Clean up
     print("\nCleaning up...")
     for d in sp.displays:
         os.unlink(d.outfile.name)
