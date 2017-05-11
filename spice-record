@@ -40,6 +40,13 @@ __version__ = '0.1.0'
 # Maximum framerate timer error allowance (percent of frame interval)
 FRAMERATE_ERR_LIMIT_PCT = 10.0
 
+# Output H.264 pixel format
+# yuv444p is the default, but yuv420p is recommended for outdated media players.
+# However, yuv420p requires H and W divisible by 2.
+# https://github.com/mirror/x264/blob/90a61ec764/encoder/encoder.c#L501
+H264_PIX_FMT    = 'yuv444p'
+
+
 class AppError(Exception):
     def __init__(self, message, exit_code=2):
         super().__init__(message)
@@ -404,6 +411,7 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
         maxh = max(maxh, d.height)
 
     # The FFmpeg 'pad' filter can't handle odd sizes, ensure they're even
+    # TODO: Can we get rid of this now that we're using yuv444p?
     def align(x, align):
         return (x + align - 1) & ~(align - 1)
     maxw = align(maxw, 2)
@@ -446,7 +454,7 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
 
         # Specify output video parameters
         '-vcodec', outcodec,
-        '-pix_fmt', 'yuv420p',  # avoid warning
+        '-pix_fmt', H264_PIX_FMT,
 
         # Map the [outv] to the output file
         '-map', '[outv]',
@@ -454,7 +462,6 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
     ]
     logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
     subprocess.check_call(ffmpeg_args)
-
 
 class FFmpegRawStream:
     """A stream of raw video to an FFMPEG process"""
@@ -477,7 +484,7 @@ class FFmpegRawStream:
 
             # Specify output video parameters
             '-vcodec', outcodec,
-            '-pix_fmt', 'yuv420p',  # avoid warning
+            '-pix_fmt', H264_PIX_FMT,
 
             # Ouptut file,
             self.path,
