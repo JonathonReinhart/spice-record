@@ -459,14 +459,9 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
 class FFmpegRawStream:
     """A stream of raw video to an FFMPEG process"""
 
-    def __init__(self, display, framerate, outcodec, loglevel):
-        with tempfile.NamedTemporaryFile(
-                prefix='spice-record-',
-                suffix='{}x{}.mp4'.format(display.width, display.height),
-                ) as f:
-            self.path = f.name
+    def __init__(self, path, display, framerate, outcodec, loglevel):
+        self.path = path
 
-        args = [
         ffmpeg_args = [
             'ffmpeg',
             '-loglevel', loglevel,
@@ -684,8 +679,19 @@ def main():
 
     domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
 
+    tmpdir = tempfile.mkdtemp(prefix='spice-record-')
+    try:
+        record(args, dom, tmpdir)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+def record(args, dom, tmpdir):
     def create_ffmpeg_stream(display):
-        return FFmpegRawStream(display,
+        path = os.path.join(tmpdir, '{:03}-{}x{}.mp4'.format(
+            display.index, display.width, display.height))
+        return FFmpegRawStream(
+            path = path,
+            display = display,
             framerate = args.framerate,
             outcodec = args.vcodec,
             loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
@@ -755,13 +761,6 @@ def main():
                 outpath = args.output,
                 loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
                 )
-
-    # Clean up
-    print("\nCleaning up...")
-    for d in sp.displays:
-        if d.outfile:
-            os.unlink(d.outfile.name)
-
     print("\n{} written!".format(args.output))
 
 
