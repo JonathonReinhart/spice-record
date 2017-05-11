@@ -37,9 +37,6 @@ from gi.repository import SpiceClientGLib
 
 __version__ = '0.1.0'
 
-# Maximum framerate timer error allowance (percent of frame interval)
-FRAMERATE_ERR_LIMIT_PCT = 10.0
-
 # Output H.264 pixel format
 # yuv444p is the default, but yuv420p is recommended for outdated media players.
 # However, yuv420p requires H and W divisible by 2.
@@ -148,8 +145,6 @@ class SpiceRecorder(GObject.GObject):
         self._display_channel = None
         self._displays = []             # displays created, in chrono. order
         self._active_display = None     # currently active display
-
-        self._last_frame_t = None
 
         self._last_periodic_update_t = None
         self._num_frames_recorded = 0
@@ -291,16 +286,6 @@ class SpiceRecorder(GObject.GObject):
 
     def _record_frame(self):
         now = time.time()
-
-        # Calculate framerate timer error
-        t_frame = 1 / self.framerate
-        if self._last_frame_t:
-            dt = now - self._last_frame_t
-            err = dt - t_frame
-            err_pct = (err / t_frame) * 100
-            if err_pct > FRAMERATE_ERR_LIMIT_PCT:
-                logging.warning("Framerate error exceeds threshold: dt={} err={} ({}%)".format(dt, err, err_pct))
-        self._last_frame_t = now
 
         # Ugh, can we miss frames here while there is no display?
         if not self._active_display:
@@ -472,6 +457,8 @@ class FFmpegRawStream:
         ffmpeg_args = [
             'ffmpeg',
             '-loglevel', loglevel,
+
+            '-use_wallclock_as_timestamps', '1',
 
             # Input file
             '-f', 'rawvideo',
