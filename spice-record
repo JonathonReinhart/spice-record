@@ -57,7 +57,8 @@ class SpiceSurfaceFmt(Enum):
 
 
 class Display(GObject.GObject):
-    def __init__(self, channel, width, height, stride, shmid, imgdata, outfile):
+    def __init__(self, index, channel, width, height, stride, shmid, imgdata, outfile):
+        self.index   = index
         self.channel = channel
         self.width   = width
         self.height  = height
@@ -240,7 +241,7 @@ class SpiceRecorder(GObject.GObject):
             return
 
         outf = self._create_display_stream
-        d = Display.get_format_class(format)(channel, width, height, stride, shmid, imgdata, outf)
+        d = Display.get_format_class(format)(len(self._displays), channel, width, height, stride, shmid, imgdata, outf)
         logging.debug("New display: %s", d)
         self._active_display = d
         self._displays.append(d)
