@@ -743,9 +743,12 @@ def record(args, dom, tmpdir):
     print("-"*80)
 
 
-    if len(sp.displays) == 1:
+    # Filter out displays with no frames
+    displays = [d for d in sp.displays if d.frames_recorded]
+
+    if len(displays) == 1:
         # Optimization: use the only intermediate video as the final
-        d = sp.displays[0]
+        d = displays[0]
         src = d.outfile.name
         d.outfile = None
         logging.info("Moving {} to {}".format(src, args.output))
@@ -755,7 +758,7 @@ def record(args, dom, tmpdir):
         # Convert video
         print("\nDone recording. Converting...")
         convert_concat_videos(
-                displays = sp.displays,
+                displays = displays,
                 framerate = args.framerate,
                 outcodec = args.vcodec,
                 outpath = args.output,
