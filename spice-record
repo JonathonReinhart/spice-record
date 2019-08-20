@@ -504,7 +504,7 @@ def lookup_domain(conn, key):
 
         # Try UUID
         try:
-            return conn.lookupByUUID(UUID(key))
+            return conn.lookupByUUID(UUID(key).bytes)
         except ValueError:
             pass
 
