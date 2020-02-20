@@ -35,13 +35,16 @@ import gi
 gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 # Output H.264 pixel format
 # yuv444p is the default, but yuv420p is recommended for outdated media players.
 # However, yuv420p requires H and W divisible by 2.
+# We use yuv444p as the intermediate format when necessary, and re-encode to yuv420p with padding.
 # https://github.com/mirror/x264/blob/90a61ec764/encoder/encoder.c#L501
-H264_PIX_FMT    = 'yuv444p'
+H264_PIX_FMT_INTERMEDIATE = lambda disp: (
+    'yuv420p' if disp.height % 2 == 0 and disp.width % 2 == 0 else 'yuv444p')
+H264_PIX_FMT_FINAL = 'yuv420p'
 
 
 class AppError(Exception):
@@ -438,7 +441,7 @@ def convert_concat_videos(displays, framerate, outcodec, outpath, loglevel=None)
 
         # Specify output video parameters
         '-vcodec', outcodec,
-        '-pix_fmt', H264_PIX_FMT,
+        '-pix_fmt', H264_PIX_FMT_FINAL,
 
         # Map the [outv] to the output file
         '-map', '[outv]',
@@ -470,7 +473,7 @@ class FFmpegRawStream:
 
             # Specify output video parameters
             '-vcodec', outcodec,
-            '-pix_fmt', H264_PIX_FMT,
+            '-pix_fmt', H264_PIX_FMT_INTERMEDIATE(display),
 
             # Ouptut file,
             self.path,
@@ -740,7 +743,7 @@ def record(args, dom, tmpdir):
     # Filter out displays with no frames
     displays = [d for d in sp.displays if d.frames_recorded]
 
-    if len(displays) == 1:
+    if len(displays) == 1 and H264_PIX_FMT_INTERMEDIATE(displays[0]) == H264_PIX_FMT_FINAL:
         # Optimization: use the only intermediate video as the final
         d = displays[0]
         src = d.outfile.name
