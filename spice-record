@@ -169,7 +169,7 @@ class SpiceRecorder(GObject.GObject):
         logging.debug('openGraphicsFD(0) returned %d', fd)
         return fd
 
-    def _create_spice_session(self, conf):
+    def _create_spice_session(self, conf={}):
         assert not self._spice_session
         self._spice_session = SpiceClientGLib.Session(read_only=True, **conf)
         SpiceClientGLib.set_session_option(self._spice_session)
