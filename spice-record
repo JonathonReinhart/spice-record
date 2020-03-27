@@ -52,6 +52,13 @@ class AppError(Exception):
         super().__init__(message)
         self.exit_code = exit_code
 
+quiet = False
+def qprint(*args, **kwargs):
+    if quiet:
+        return
+    return print(*args, **kwargs)
+
+
 class SpiceSurfaceFmt(Enum):
     # spice-1/spice/enums.h
     SPICE_SURFACE_FMT_INVALID = 0
@@ -565,7 +572,7 @@ def domain_wait(domain, target_state):
         if state == target_state:
             break
         if not printed:
-            print("Waiting for domain to enter state {}".format(target_state))
+            qprint("Waiting for domain to enter state {}".format(target_state))
             printed = True
         time.sleep(0.1)         # TODO: Handle asynchronously: See virt_viewer_domain_event()
 
@@ -643,6 +650,8 @@ def parse_args():
 
     ap.add_argument('-o', '--output', metavar='FILENAME',
             help='Output filename (defaults to <domain-name>.mp4)')
+    ap.add_argument('-q', '--quiet', action='store_true',
+            help="Don't output anything to the console")
     ap.add_argument('-v', '--version', action='version',
             version='spice-record ' + __version__)
 
@@ -660,6 +669,10 @@ def format_datasize(b):
 def main():
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
+
+    if args.quiet:
+        global quiet
+        quiet = True
 
     libvirt.registerErrorHandler(f=libvirt_err_handler, ctx=None)
 
@@ -704,20 +717,20 @@ def record(args, dom, tmpdir):
 
         # Record raw video
         def periodic_update(sp):
-            print("\r" + " "*80, end="")
-            print("\r{:<20}{:<20}{:<20}".format(
+            qprint("\r" + " "*80, end="")
+            qprint("\r{:<20}{:<20}{:<20}".format(
                 "{:0.02f} sec".format(sp.elapsed_time),
                 "{} frames".format(sp.frames_recorded),
                 format_datasize(sp.bytes_recorded),
                 ), end="")
 
         def on_stopped(sp, msg):
-            print("\nRecording stopped:", msg)
+            qprint("\nRecording stopped:", msg)
 
         sp.connect("periodic-update", periodic_update)
         sp.connect("recording-stopped", on_stopped)
 
-        print("Recording... Press Q to stop")
+        qprint("Recording... Press Q to stop")
         sp.run()
 
 
@@ -726,18 +739,18 @@ def record(args, dom, tmpdir):
         rc = d.outfile.close()
 
 
-    print("-"*80)
-    print("Recorded displays:")
+    qprint("-"*80)
+    qprint("Recorded displays:")
     maxw, maxh = 0, 0
     for n,d in enumerate(sp.displays):
-        print("  {}: {}x{} {:>4} frames  {:>10}  {:0.02f} sec".format(n, d.width, d.height,
+        qprint("  {}: {}x{} {:>4} frames  {:>10}  {:0.02f} sec".format(n, d.width, d.height,
             d.frames_recorded,
             format_datasize(os.path.getsize(d.outfile.name)),
             d.duration))
         maxw = max(maxw, d.width)
         maxh = max(maxh, d.height)
-    print("Final: {}x{}".format(maxw, maxh))
-    print("-"*80)
+    qprint("Final: {}x{}".format(maxw, maxh))
+    qprint("-"*80)
 
 
     # Filter out displays with no frames
@@ -753,7 +766,7 @@ def record(args, dom, tmpdir):
 
     else:
         # Convert video
-        print("\nDone recording. Converting...")
+        qprint("\nDone recording. Converting...")
         convert_concat_videos(
                 displays = displays,
                 framerate = args.framerate,
@@ -761,7 +774,7 @@ def record(args, dom, tmpdir):
                 outpath = args.output,
                 loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
                 )
-    print("\n{} written!".format(args.output))
+    qprint("\n{} written!".format(args.output))
 
 
 if __name__ == '__main__':
@@ -769,8 +782,8 @@ if __name__ == '__main__':
         main()
         sys.exit(0)
     except KeyboardInterrupt:
-        print("Exiting due to Ctrl+C")
+        print("Exiting due to Ctrl+C", file=sys.stderr)
         sys.exit(1)
     except AppError as err:
-        print(err)
+        print(err, file=sys.stderr)
         sys.exit(err.exit_code)
