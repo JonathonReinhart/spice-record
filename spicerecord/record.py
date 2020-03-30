@@ -285,10 +285,10 @@ class SpiceRecorder(GObject.GObject):
                 )
 
     def _stop_recording(self, reason=""):
-        logging.debug('Removing _record_timeout_id = %d', self._record_timeout_id)
-
-        GLib.source_remove(self._record_timeout_id)
-        self._record_timeout_id = None
+        if self._record_timeout_id != None:
+            logging.debug('Removing _record_timeout_id = %d', self._record_timeout_id)
+            GLib.source_remove(self._record_timeout_id)
+            self._record_timeout_id = None
 
         self.emit("recording-stopped", reason)
         self._mainloop.quit()
