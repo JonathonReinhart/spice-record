@@ -11,6 +11,7 @@ class SpiceRecordWrapper:
 
         self.dom = dom
         self.output = output
+        self.uri = uri
 
     def __enter__(self):
         pkg = '.'.join(__name__.split('.')[:-1])
@@ -20,6 +21,8 @@ class SpiceRecordWrapper:
         ]
         if self.output:
             args += ['--output', self.output]
+        if self.uri:
+            args += ['--connect', self.uri]
         args.append(self.dom)
 
         self.p = subprocess.Popen(
