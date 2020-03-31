@@ -48,4 +48,4 @@ connections][MultipleClients] to a single spice server.
 
 [spice-record]: https://github.com/JonathonReinhart/spice-record
 [SPICE]: https://www.spice-space.org/
-[MultipleClients]: https://www.spice-space.org/page/Features/MultipleClients
+[MultipleClients]: https://www.spice-space.org/multiple-clients.html
