@@ -11,20 +11,17 @@
 # - https://ffmpeg.org/ffmpeg-filters.html
 # - https://ffmpeg.org/ffmpeg-filters.html#scale
 # - https://ffmpeg.org/ffmpeg-filters.html#concat
-import argparse
 import logging
 import time
 import ctypes
 from enum import Enum
 import tempfile
 import subprocess
-import signal
 import os
 import sys
 import shutil
 import libvirt
 import termios
-from uuid import UUID
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
@@ -35,7 +32,6 @@ import gi
 gi.require_version('SpiceClientGLib', '2.0')
 from gi.repository import SpiceClientGLib
 
-__version__ = '0.1.1'
 
 # Output H.264 pixel format
 # yuv444p is the default, but yuv420p is recommended for outdated media players.
@@ -47,10 +43,6 @@ H264_PIX_FMT_INTERMEDIATE = lambda disp: (
 H264_PIX_FMT_FINAL = 'yuv420p'
 
 
-class AppError(Exception):
-    def __init__(self, message, exit_code=2):
-        super().__init__(message)
-        self.exit_code = exit_code
 
 quiet = False
 def qprint(*args, **kwargs):
@@ -285,10 +277,10 @@ class SpiceRecorder(GObject.GObject):
                 )
 
     def _stop_recording(self, reason=""):
-        logging.debug('Removing _record_timeout_id = %d', self._record_timeout_id)
-
-        GLib.source_remove(self._record_timeout_id)
-        self._record_timeout_id = None
+        if self._record_timeout_id != None:
+            logging.debug('Removing _record_timeout_id = %d', self._record_timeout_id)
+            GLib.source_remove(self._record_timeout_id)
+            self._record_timeout_id = None
 
         self.emit("recording-stopped", reason)
         self._mainloop.quit()
@@ -503,29 +495,6 @@ class FFmpegRawStream:
             raise subprocess.CalledProcessError(rc, 'ffmpeg')
 
 
-def lookup_domain(conn, key):
-    try:
-        # Try ID
-        try:
-            return conn.lookupByID(int(key))
-        except ValueError:
-            pass
-
-        # Try UUID
-        try:
-            return conn.lookupByUUID(UUID(key).bytes)
-        except ValueError:
-            pass
-
-        # Try name
-        return conn.lookupByName(key)
-
-    except libvirt.libvirtError as err:
-        if err.get_error_code() != libvirt.VIR_ERR_NO_DOMAIN:
-            raise
-        raise AppError(str(err))
-
-
 def domain_extract_connect_info(domain):
     # See
     #   virt_viewer_extract_connect_info()
@@ -576,23 +545,6 @@ def domain_wait(domain, target_state):
             printed = True
         time.sleep(0.1)         # TODO: Handle asynchronously: See virt_viewer_domain_event()
 
-def unique_filename(path):
-    base, ext = os.path.splitext(path)
-    idx = None
-
-    while True:
-        if idx is not None:
-            path = "{}_{}{}".format(base, idx, ext)
-        else:
-            path = base + ext
-
-        try:
-            f = open(path, 'x')
-            f.close()
-            return path
-        except FileExistsError:
-            idx = 0 if (idx is None) else (idx + 1)
-
 class TtyCbreakMode:
     LFLAG = 3
     CC = 6
@@ -618,10 +570,6 @@ class TtyCbreakMode:
             t.tcsetattr(sys.stdin.fileno(), t.TCSADRAIN, self.orig_mode)
 
 
-def libvirt_err_handler(ignore, err):
-    if err[3] != libvirt.VIR_ERR_ERROR:
-        # Don't log libvirt errors: global error handler will do that
-        logging.warn("Non-error from libvirt: '%s'" % err[2])
 
 def logging_to_ffmpeg_loglevel(ll):
     return {
@@ -632,30 +580,6 @@ def logging_to_ffmpeg_loglevel(ll):
         'CRITICAL': 'fatal',
     }[ll]
 
-def parse_args():
-    ap = argparse.ArgumentParser()
-
-    # Recording options
-    ap.add_argument('--vcodec', default='libx264',
-            help='Set the output video codec (see "ffmpeg -encoders" for choices)')
-    ap.add_argument('--loglevel', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-            help='Set the logging level (default=WARNING)', default='WARNING')
-    ap.add_argument('-r', '--framerate', type=int, default=24)
-
-    # Libvirt options and domain
-    ap.add_argument('-c', '--connect', dest='libvirt_uri',
-            help='Connect to hypervisor (e.g. qemu:///system)')
-    ap.add_argument('machine', metavar='DOMAIN-NAME|ID|UUID',
-            help='Machine to record')
-
-    ap.add_argument('-o', '--output', metavar='FILENAME',
-            help='Output filename (defaults to <domain-name>.mp4)')
-    ap.add_argument('-q', '--quiet', action='store_true',
-            help="Don't output anything to the console")
-    ap.add_argument('-v', '--version', action='version',
-            version='spice-record ' + __version__)
-
-    return ap.parse_args()
 
 
 def format_datasize(b):
@@ -666,36 +590,8 @@ def format_datasize(b):
         b /= 1024.0
     return '{:0.02f} {}B'.format(b, s)
 
-def main():
-    args = parse_args()
-    logging.basicConfig(level=args.loglevel)
 
-    if args.quiet:
-        global quiet
-        quiet = True
-
-    libvirt.registerErrorHandler(f=libvirt_err_handler, ctx=None)
-
-    # Open libvirt connection
-    logging.info("Opening connection to %s", args.libvirt_uri)
-    conn = libvirt.open(args.libvirt_uri)   # read only access prevents virDomainOpenGraphicsFD
-
-    # Try to get domain
-    dom = lookup_domain(conn, args.machine)
-    logging.info('Using domain "%s" (%s)', dom.name(), dom.UUIDString())
-
-    if not args.output:
-        args.output = unique_filename(dom.name() + '.mp4')
-
-    domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
-
-    tmpdir = tempfile.mkdtemp(prefix='spice-record-')
-    try:
-        record(args, dom, tmpdir)
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
-def record(args, dom, tmpdir):
+def _record(args, dom, tmpdir):
     def create_ffmpeg_stream(display):
         path = os.path.join(tmpdir, '{:03}-{}x{}.mp4'.format(
             display.index, display.width, display.height))
@@ -706,6 +602,8 @@ def record(args, dom, tmpdir):
             outcodec = args.vcodec,
             loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
             )
+
+    domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
 
     with TtyCbreakMode():
         # Open spice session
@@ -777,13 +675,9 @@ def record(args, dom, tmpdir):
     qprint("\n{} written!".format(args.output))
 
 
-if __name__ == '__main__':
+def record(args, dom):
+    tmpdir = tempfile.mkdtemp(prefix='spice-record-')
     try:
-        main()
-        sys.exit(0)
-    except KeyboardInterrupt:
-        print("Exiting due to Ctrl+C", file=sys.stderr)
-        sys.exit(1)
-    except AppError as err:
-        print(err, file=sys.stderr)
-        sys.exit(err.exit_code)
+        _record(args, dom, tmpdir)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
