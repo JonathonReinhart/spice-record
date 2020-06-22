@@ -59,8 +59,12 @@ class SpiceRecordWrapper:
     def stop(self):
         if self.stopped:
             raise Exception("stop() already called")
-        self.p.stdin.write(b'Q\n')
-        self.p.stdin.close()
+        try:
+            self.p.stdin.write(b'Q\n')
+            self.p.stdin.close()
+        except (BrokenPipeError, IOError):
+            # The process has already exited
+            pass
         self.stopped = True
 
     def wait(self):
