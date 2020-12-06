@@ -25,6 +25,7 @@ optional arguments:
                         Connect to hypervisor (e.g. qemu:///system)
   -o FILENAME, --output FILENAME
                         Output filename (defaults to <domain-name>.mp4)
+  -p, --preview         Preview output in VLC. Requires VLC installed.
 ```
 
 ## Requirements
@@ -33,6 +34,7 @@ optional arguments:
 - `spice-glib`
 - `pygobject3`
 - `ffmpeg`
+- `vlc` for previews, otherwise not needed
 
 If `virt-manager` is installed on a modern distro (which has ported all of its
 Python apps to Python 3), then everything should already be installed, aside

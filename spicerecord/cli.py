@@ -87,6 +87,9 @@ def parse_args():
             help="Don't output anything to the console")
     ap.add_argument('-v', '--version', action='version',
             version='spice-record ' + __version__)
+    
+    ap.add_argument('-p', '--preview', action='store_true',
+            help="Preview output in VLC. Requires VLC installed.")
 
     return ap.parse_args()
 
@@ -95,8 +98,8 @@ def _main():
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
 
-    if args.quiet:
-        record.quiet = True
+    record.quiet = args.quiet
+    record.preview = args.preview
 
     libvirt.registerErrorHandler(f=libvirt_err_handler, ctx=None)
 

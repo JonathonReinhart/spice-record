@@ -45,6 +45,7 @@ H264_PIX_FMT_FINAL = 'yuv420p'
 
 
 quiet = False
+preview = False
 def qprint(*args, **kwargs):
     if quiet:
         return
@@ -477,6 +478,10 @@ class FFmpegRawStream:
             # Ouptut file,
             self.path,
         ]
+        if preview:
+            vlc_args = f'vlc --demux rawvideo --rawvid-fps {framerate} --rawvid-width {display.width} --rawvid-height {display.height} --rawvid-chroma RV32 -'
+            logging.debug("Invoking VLC: {}".format(vlc_args))
+            self.pvlc = subprocess.Popen(vlc_args, shell=True, stdin=subprocess.PIPE)
         logging.debug("Invoking FFMPEG: {}".format(ffmpeg_args))
         self.p = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE)
 
@@ -486,6 +491,12 @@ class FFmpegRawStream:
         return self.path
 
     def write(self, data):
+        global preview
+        if preview:
+            try:
+                self.pvlc.stdin.write(data)
+            except BrokenPipeError:
+                preview = False
         return self.p.stdin.write(data)
 
     def close(self):
