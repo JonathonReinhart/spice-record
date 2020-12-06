@@ -1,2 +1,6 @@
 __pycache__
 *.mp4
+venv
+build
+dist
+*.egg-info
