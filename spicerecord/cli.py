@@ -40,6 +40,7 @@ def lookup_domain(conn, key):
         return conn.lookupByName(key)
 
     except libvirt.libvirtError as err:
+        return None
         if err.get_error_code() != libvirt.VIR_ERR_NO_DOMAIN:
             raise
         raise AppError(str(err))
@@ -106,12 +107,15 @@ def _main():
 
     # Try to get domain
     dom = lookup_domain(conn, args.machine)
-    logging.info('Using domain "%s" (%s)', dom.name(), dom.UUIDString())
+    if dom is None:
+        logging.info('domain not found')
+    else:
+        logging.info('Using domain "%s" (%s)', dom.name(), dom.UUIDString())
 
     if not args.output:
         args.output = unique_filename(dom.name() + '.mp4')
 
-    record.record(args, dom)
+    record.record(args, dom or args.machine)
 
 
 def main():

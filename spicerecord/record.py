@@ -344,15 +344,28 @@ class SpiceRecorder(GObject.GObject):
         self._spice_session.open_fd(fd)
 
     def _open_host(self):
-        coninfo = domain_extract_connect_info(self._vm)
-        logging.debug("Spice connecting to host=%s port=%s tlsport=%s",
-            coninfo.ghost, coninfo.gport, coninfo.gtlsport)
-        conf = {
-            "host": coninfo.ghost,
-            "port": coninfo.gport,
-            "tls_port": coninfo.gtlsport,
-            "password": coninfo.gpasswd,
-        }
+        if not isinstance(self._vm, str):
+            coninfo = domain_extract_connect_info(self._vm)
+            logging.debug("Spice connecting to host=%s port=%s tlsport=%s",
+                coninfo.ghost, coninfo.gport, coninfo.gtlsport)
+            conf = {
+                "host": coninfo.ghost,
+                "port": coninfo.gport,
+                "tls_port": coninfo.gtlsport,
+                "password": coninfo.gpasswd,
+            }
+        else:
+            logging.debug("Spice connecting to %s", self._vm)
+            u = urlparse(self._vm)
+            if u.scheme == 'spice+unix':
+                conf = {
+                    "unix-path": u.path,
+                }
+            else:
+                conf = {
+                    "host": u.hostname,
+                    "port": u.port,
+                }
 
         self._create_spice_session(conf)
         self._spice_session.connect()
@@ -362,11 +375,14 @@ class SpiceRecorder(GObject.GObject):
         #   - virt_viewer_open_connection()
         #   - virt-manager Viewer._open
 
-        fd = self._get_fd_for_open()
-        if fd is not None:
-            self._open_fd(fd)
-        else:
+        if isinstance(self._vm, str):
             self._open_host()
+        else:
+            fd = self._get_fd_for_open()
+            if fd is not None:
+                self._open_fd(fd)
+            else:
+                self._open_host()
 
     def run(self):
         self._mainloop.run()
@@ -603,7 +619,8 @@ def _record(args, dom, tmpdir):
             loglevel = logging_to_ffmpeg_loglevel(args.loglevel),
             )
 
-    domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
+    if not isinstance(dom, str):
+        domain_wait(dom, libvirt.VIR_DOMAIN_RUNNING)
 
     with TtyCbreakMode():
         # Open spice session
